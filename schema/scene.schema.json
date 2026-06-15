@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/julian-1503/tempo/schema/scene.schema.json",
+  "title": "Tempo Scene",
+  "description": "A named, switchable profile of app-to-workspace assignments plus visibility.",
+  "type": "object",
+  "required": ["name", "assignments"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique Scene name."
+    },
+    "hideUnassigned": {
+      "type": "boolean",
+      "default": true,
+      "description": "When activating the Scene, hide apps that have no assignment (presentation-safe)."
+    },
+    "focusWorkspace": {
+      "type": "string",
+      "description": "Workspace to focus when this Scene is activated. Optional."
+    },
+    "assignments": {
+      "type": "array",
+      "description": "Rules mapping matched windows to workspaces.",
+      "items": { "$ref": "#/$defs/assignment" }
+    }
+  },
+  "$defs": {
+    "assignment": {
+      "type": "object",
+      "required": ["match", "workspace"],
+      "additionalProperties": false,
+      "properties": {
+        "match": { "$ref": "#/$defs/match" },
+        "workspace": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Target workspace id (must exist in the workspace list)."
+        },
+        "float": {
+          "type": "boolean",
+          "default": false,
+          "description": "Force this window to float rather than tile."
+        }
+      }
+    },
+    "match": {
+      "type": "object",
+      "description": "A window matcher. At least one of bundleId or titleRegex is required. More specific matchers (both fields) win over less specific ones.",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "bundleId": {
+          "type": "string",
+          "description": "Exact app bundle identifier, e.g. com.brave.Browser. Preferred (robust, fast)."
+        },
+        "titleRegex": {
+          "type": "string",
+          "description": "Regular expression matched against the window title. Fallback for un-appified browser windows."
+        }
+      }
+    }
+  }
+}
