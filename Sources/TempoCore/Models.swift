@@ -67,3 +67,28 @@ public enum RoutingDecision: Equatable, Sendable {
     /// No assignment matched: show the window in the current workspace (ephemeral).
     case showInCurrent(float: Bool)
 }
+
+/// A single window's target placement when a Scene is activated.
+public struct WindowPlacement: Equatable, Sendable {
+    public let window: WindowInfo
+    public let workspace: WorkspaceID
+    public let float: Bool
+
+    public init(window: WindowInfo, workspace: WorkspaceID, float: Bool) {
+        self.window = window
+        self.workspace = workspace
+        self.float = float
+    }
+}
+
+/// The full plan for activating a Scene: where matched windows go, and which apps to hide.
+public struct PlacementPlan: Equatable, Sendable {
+    public let placements: [WindowPlacement]
+    /// Bundle ids of apps to app-hide (apps whose every window is unassigned).
+    public let hides: [String]
+
+    public init(placements: [WindowPlacement], hides: [String]) {
+        self.placements = placements
+        self.hides = hides
+    }
+}
