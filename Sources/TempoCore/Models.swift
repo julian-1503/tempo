@@ -23,7 +23,7 @@ public struct WindowInfo: Equatable, Sendable {
 }
 
 /// A window matcher. At least one field is set; more specific matchers win.
-public struct WindowMatch: Equatable, Sendable {
+public struct WindowMatch: Equatable, Sendable, Codable {
     public let bundleId: String?
     public let titleRegex: String?
 
