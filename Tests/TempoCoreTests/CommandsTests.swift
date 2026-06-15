@@ -29,6 +29,28 @@ struct CommandsTests {
         """)
     }
 
+    @Test("builds a scene from current placements: one assignment per app+workspace, deduped and sorted")
+    func snapshotsFromPlacements() {
+        func placed(_ bundleId: String, _ title: String, _ workspace: WorkspaceID) -> PlacedWindow {
+            PlacedWindow(window: WindowInfo(bundleId: bundleId, title: title, subrole: .standardWindow),
+                         workspace: workspace)
+        }
+        let placements = [
+            placed("com.apple.mail", "Inbox", "5"),
+            placed("com.brave.Browser", "Allpoint", "A"),
+            placed("com.brave.Browser", "Reddit", "A"),   // same app+workspace -> deduped
+            placed("com.brave.Browser", "ChatGPT", "C"),  // same app, different workspace -> kept
+        ]
+
+        let scene = Commands.sceneFromPlacements(placements, name: "snap")
+
+        #expect(scene == Scene(name: "snap", assignments: [
+            Assignment(match: WindowMatch(bundleId: "com.apple.mail"), workspace: "5"),
+            Assignment(match: WindowMatch(bundleId: "com.brave.Browser"), workspace: "A"),
+            Assignment(match: WindowMatch(bundleId: "com.brave.Browser"), workspace: "C"),
+        ], hideUnassigned: true))
+    }
+
     @Test("lists scene names as text and as json")
     func listsScenes() throws {
         let store = try tempStore()

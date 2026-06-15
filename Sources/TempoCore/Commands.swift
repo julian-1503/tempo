@@ -15,6 +15,23 @@ public enum Commands {
         return String(decoding: data, as: UTF8.self)
     }
 
+    public static func sceneFromPlacements(_ placements: [PlacedWindow],
+                                           name: String,
+                                           hideUnassigned: Bool = true) -> Scene {
+        var seen = Set<String>()
+        var pairs: [(bundleId: String, workspace: WorkspaceID)] = []
+        for placement in placements {
+            let key = placement.window.bundleId + "\u{0}" + placement.workspace
+            if seen.insert(key).inserted {
+                pairs.append((placement.window.bundleId, placement.workspace))
+            }
+        }
+        let assignments = pairs
+            .sorted { ($0.workspace, $0.bundleId) < ($1.workspace, $1.bundleId) }
+            .map { Assignment(match: WindowMatch(bundleId: $0.bundleId), workspace: $0.workspace) }
+        return Scene(name: name, assignments: assignments, hideUnassigned: hideUnassigned)
+    }
+
     public static func renderScene(_ scene: Scene) -> String {
         var lines = ["Scene: \(scene.name)" + (scene.hideUnassigned ? " [hide unassigned]" : "")]
         let sorted = scene.assignments.sorted {

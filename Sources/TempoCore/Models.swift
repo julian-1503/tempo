@@ -74,6 +74,17 @@ public enum RoutingDecision: Equatable, Sendable {
     case showInCurrent(float: Bool)
 }
 
+/// A window observed at a known workspace (the engine's current state). Input to snapshotting.
+public struct PlacedWindow: Equatable, Sendable {
+    public let window: WindowInfo
+    public let workspace: WorkspaceID
+
+    public init(window: WindowInfo, workspace: WorkspaceID) {
+        self.window = window
+        self.workspace = workspace
+    }
+}
+
 /// A single window's target placement when a Scene is activated.
 public struct WindowPlacement: Equatable, Sendable {
     public let window: WindowInfo
