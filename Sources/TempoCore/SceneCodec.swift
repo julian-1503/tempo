@@ -28,14 +28,15 @@ extension Assignment: Codable {
 }
 
 extension Scene: Codable {
-    enum CodingKeys: String, CodingKey { case name, hideUnassigned, assignments }
+    enum CodingKeys: String, CodingKey { case name, hideUnassigned, focusWorkspace, assignments }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
             name: try container.decode(String.self, forKey: .name),
             assignments: try container.decode([Assignment].self, forKey: .assignments),
-            hideUnassigned: try container.decodeIfPresent(Bool.self, forKey: .hideUnassigned) ?? true
+            hideUnassigned: try container.decodeIfPresent(Bool.self, forKey: .hideUnassigned) ?? true,
+            focusWorkspace: try container.decodeIfPresent(String.self, forKey: .focusWorkspace)
         )
     }
 
@@ -43,6 +44,7 @@ extension Scene: Codable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(name, forKey: .name)
         try container.encode(hideUnassigned, forKey: .hideUnassigned)
+        try container.encodeIfPresent(focusWorkspace, forKey: .focusWorkspace)
         try container.encode(assignments, forKey: .assignments)
     }
 }

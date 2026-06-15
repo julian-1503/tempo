@@ -51,11 +51,17 @@ public struct Scene: Equatable, Sendable {
     public let name: String
     public let assignments: [Assignment]
     public let hideUnassigned: Bool
+    /// Workspace to focus when the Scene is activated. Optional.
+    public let focusWorkspace: WorkspaceID?
 
-    public init(name: String, assignments: [Assignment], hideUnassigned: Bool = true) {
+    public init(name: String,
+                assignments: [Assignment],
+                hideUnassigned: Bool = true,
+                focusWorkspace: WorkspaceID? = nil) {
         self.name = name
         self.assignments = assignments
         self.hideUnassigned = hideUnassigned
+        self.focusWorkspace = focusWorkspace
     }
 }
 

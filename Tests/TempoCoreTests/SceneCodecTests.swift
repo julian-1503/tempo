@@ -47,6 +47,25 @@ struct SceneCodecTests {
         #expect(decoded == scene)
     }
 
+    @Test("loads and round-trips an optional focusWorkspace")
+    func focusWorkspaceRoundTrips() throws {
+        let json = """
+        { "name": "work", "focusWorkspace": "C", "assignments": [] }
+        """
+        let scene = try Scene.load(fromJSON: Data(json.utf8))
+        #expect(scene.focusWorkspace == "C")
+
+        let decoded = try Scene.load(fromJSON: scene.encodedJSON())
+        #expect(decoded.focusWorkspace == "C")
+    }
+
+    @Test("focusWorkspace is nil when omitted")
+    func focusWorkspaceDefaultsNil() throws {
+        let json = #"{ "name": "work", "assignments": [] }"#
+        let scene = try Scene.load(fromJSON: Data(json.utf8))
+        #expect(scene.focusWorkspace == nil)
+    }
+
     @Test("rejects an assignment whose matcher has no fields")
     func rejectsEmptyMatch() {
         let json = """
