@@ -46,7 +46,16 @@ case "version", "--version":
 
 case "query":
     guard args.count >= 2, args[1] == "windows" else { fail("usage: tempo query windows [--json]") }
-    fail(engineMissing, code: 3)
+    do {
+        print(try Commands.queryWindows(source: AXWindowSource()))
+    } catch EngineError.accessibilityNotTrusted {
+        fail("""
+        Accessibility permission required.
+        Grant it in System Settings › Privacy & Security › Accessibility, then re-run.
+        """, code: 5)
+    } catch {
+        fail("error: \(error)")
+    }
 
 case "scene":
     guard args.count >= 2 else { fail("usage: tempo scene <list|show|render|apply|create> ...") }
