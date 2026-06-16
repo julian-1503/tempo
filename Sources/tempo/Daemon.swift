@@ -18,6 +18,7 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     private let statePath: String = daemonStatePath()
     private var eventTap: CFMachPort?
     private var eventTapThread: Thread?
+    private let config: Config = loadDaemonConfig()
 
     init(fifoPath: String) { self.fifoPath = fifoPath }
 
@@ -29,7 +30,7 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         scene = loadStartupScene()
-        let active = scene?.focusWorkspace ?? "1"
+        let active = scene?.focusWorkspace ?? config.defaultWorkspace ?? "1"
         controller = WindowController(active: active, area: AXEngine.mainDisplayArea())
 
         for (element, info) in AXEngine.allWindows() where isManaged(info.bundleId) {
@@ -109,13 +110,20 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         if changed || titlesChanged { publishState() }
     }
 
+    /// Env `TEMPO_MANAGE` (comma-separated) wins; otherwise `[daemon] managed = [...]`
+    /// from `tempo.toml`; otherwise no restriction.
     private func isManaged(_ bundleId: String) -> Bool {
-        guard let list = ProcessInfo.processInfo.environment["TEMPO_MANAGE"], !list.isEmpty else { return true }
-        return list.split(separator: ",").map(String.init).contains(bundleId)
+        if let list = ProcessInfo.processInfo.environment["TEMPO_MANAGE"], !list.isEmpty {
+            return list.split(separator: ",").map(String.init).contains(bundleId)
+        }
+        if let managed = config.managed { return managed.contains(bundleId) }
+        return true
     }
 
+    /// Env `TEMPO_SCENE` wins; otherwise `[daemon] default_scene = "..."` from `tempo.toml`.
     private func loadStartupScene() -> Scene? {
-        guard let name = ProcessInfo.processInfo.environment["TEMPO_SCENE"] else { return nil }
+        let name = ProcessInfo.processInfo.environment["TEMPO_SCENE"] ?? config.defaultScene
+        guard let name else { return nil }
         return try? FileSceneStore(directory: scenesDirectory()).load(name)
     }
 
@@ -340,6 +348,24 @@ func daemonFIFOPath() -> String {
 /// Consumed by `scene create --from-current`; absence implies the daemon isn't running.
 func daemonStatePath() -> String {
     daemonBaseDirectory() + "/state.json"
+}
+
+/// Path to the hand-edited TOML config. Missing file → empty `Config`.
+func daemonConfigPath() -> String {
+    daemonBaseDirectory() + "/tempo.toml"
+}
+
+/// Read and parse `tempo.toml`. Failures (missing file, syntax error) fall back to
+/// an empty `Config`, logging to stderr — the daemon must boot regardless.
+func loadDaemonConfig() -> Config {
+    let path = daemonConfigPath()
+    guard let source = try? String(contentsOfFile: path, encoding: .utf8) else { return Config() }
+    do {
+        return try ConfigParser.parse(source)
+    } catch {
+        FileHandle.standardError.write(Data("config: parse error in \(path): \(error)\n".utf8))
+        return Config()
+    }
 }
 
 @discardableResult
