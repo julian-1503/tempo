@@ -23,6 +23,8 @@ public enum Hotkey: Equatable, Sendable {
     case focusTile(Direction)
     /// Swap the focused tile with its neighbor in the given direction.
     case moveTile(Direction)
+    /// Toggle the active workspace's tile orientation between horizontal and vertical.
+    case toggleTileOrientation
 }
 
 /// Pure mapping from (keyCode, modifiers) to a `Hotkey`. v1 binding scheme:
@@ -36,6 +38,9 @@ public enum HotkeyDecoder {
         if keyCode == kTab {
             return modifiers.contains(.shift) ? nil : .backAndForth
         }
+        if keyCode == kSlash {
+            return modifiers.contains(.shift) ? nil : .toggleTileOrientation
+        }
         if let direction = tileDirections[keyCode] {
             return modifiers.contains(.shift) ? .moveTile(direction)
                                               : .focusTile(direction)
@@ -46,6 +51,7 @@ public enum HotkeyDecoder {
     }
 
     private static let kTab: UInt16 = 48
+    private static let kSlash: UInt16 = 44
 
     /// Vim-style HJKL → tile direction. H/J/K/L are intentionally omitted from
     /// `labels` so they reach this map first.

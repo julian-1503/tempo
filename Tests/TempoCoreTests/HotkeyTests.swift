@@ -87,4 +87,16 @@ struct HotkeyTests {
     func altShiftTabUnbound() {
         #expect(HotkeyDecoder.decode(keyCode: kTab, modifiers: [.option, .shift]) == nil)
     }
+
+    let kSlash: UInt16 = 44
+
+    @Test("alt+slash decodes to toggleTileOrientation")
+    func altSlashTogglesOrientation() {
+        #expect(HotkeyDecoder.decode(keyCode: kSlash, modifiers: .option) == .toggleTileOrientation)
+    }
+
+    @Test("alt+shift+slash returns nil (only the unshifted chord toggles)")
+    func altShiftSlashUnbound() {
+        #expect(HotkeyDecoder.decode(keyCode: kSlash, modifiers: [.option, .shift]) == nil)
+    }
 }

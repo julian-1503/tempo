@@ -142,6 +142,47 @@ struct WorkspaceModelTests {
         #expect(model.visibleWindows == [10, 20])
     }
 
+    @Test("a workspace's tile orientation defaults to horizontal")
+    func defaultOrientation() {
+        let model = WorkspaceModel(active: "1")
+        #expect(model.orientation(of: "1") == .horizontal)
+        #expect(model.orientation(of: "2") == .horizontal)
+    }
+
+    @Test("setOrientation persists per-workspace and is independent across workspaces")
+    func orientationPersistence() {
+        var model = WorkspaceModel(active: "1")
+        model.setOrientation(.vertical, for: "1")
+        #expect(model.orientation(of: "1") == .vertical)
+        #expect(model.orientation(of: "2") == .horizontal)
+        model.setOrientation(.horizontal, for: "1")
+        #expect(model.orientation(of: "1") == .horizontal)
+    }
+
+    @Test("neighbor in a vertical workspace navigates j/k and ignores h/l")
+    func neighborVerticalAxis() {
+        var model = WorkspaceModel(active: "1")
+        model.add(10, to: "1")
+        model.add(20, to: "1")
+        model.add(30, to: "1")
+        model.setOrientation(.vertical, for: "1")
+        #expect(model.neighbor(of: 20, direction: .up) == 10)
+        #expect(model.neighbor(of: 20, direction: .down) == 30)
+        #expect(model.neighbor(of: 20, direction: .left) == nil)
+        #expect(model.neighbor(of: 20, direction: .right) == nil)
+    }
+
+    @Test("swapWithNeighbor in a vertical workspace swaps along j/k and refuses h/l")
+    func swapVerticalAxis() {
+        var model = WorkspaceModel(active: "1")
+        model.add(10, to: "1")
+        model.add(20, to: "1")
+        model.setOrientation(.vertical, for: "1")
+        #expect(model.swapWithNeighbor(10, direction: .left) == false)
+        #expect(model.swapWithNeighbor(10, direction: .down) == true)
+        #expect(model.visibleWindows == [20, 10])
+    }
+
     @Test("placedWindows joins assignments with the info cache, sorted by workspace then id")
     func placedWindowsJoin() {
         var model = WorkspaceModel(active: "1")

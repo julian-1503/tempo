@@ -71,6 +71,16 @@ final class WindowController {
         return true
     }
 
+    func orientation(of workspace: WorkspaceID) -> Orientation {
+        model.orientation(of: workspace)
+    }
+
+    /// Update a workspace's tile orientation; reapply layout if it's the active one.
+    func setOrientation(_ orientation: Orientation, for workspace: WorkspaceID) {
+        model.setOrientation(orientation, for: workspace)
+        if workspace == model.active { apply() }
+    }
+
     func backAndForth() {
         model.switchBackAndForth()
         apply()
@@ -79,7 +89,8 @@ final class WindowController {
     /// Tile the active workspace's windows; push everything else off-screen.
     func apply() {
         let visible = model.visibleWindows
-        let frames = tiler.layout(count: visible.count, in: area, mode: .tiles)
+        let mode: TilingMode = .tiles(model.orientation(of: model.active))
+        let frames = tiler.layout(count: visible.count, in: area, mode: mode)
         for (id, frame) in zip(visible, frames) {
             guard let element = elements[id] else { continue }
             AXEngine.setSize(element, CGSize(width: frame.width, height: frame.height))

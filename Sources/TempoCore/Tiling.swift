@@ -14,9 +14,15 @@ public struct Frame: Equatable, Sendable {
     }
 }
 
+/// Direction in which `.tiles` arranges its N windows.
+public enum Orientation: Equatable, Sendable {
+    case horizontal  // side-by-side columns
+    case vertical    // stacked rows
+}
+
 /// The tiling layout within a single workspace.
 public enum TilingMode: Equatable, Sendable {
-    case tiles
+    case tiles(Orientation)
     case accordion
 }
 
@@ -29,11 +35,20 @@ public struct Tiler {
         switch mode {
         case .accordion:
             return Array(repeating: area, count: count)
-        case .tiles:
-            let width = area.width / Double(count)
-            return (0..<count).map { index in
-                Frame(x: area.x + Double(index) * width, y: area.y,
-                      width: width, height: area.height)
+        case .tiles(let orientation):
+            switch orientation {
+            case .horizontal:
+                let width = area.width / Double(count)
+                return (0..<count).map { index in
+                    Frame(x: area.x + Double(index) * width, y: area.y,
+                          width: width, height: area.height)
+                }
+            case .vertical:
+                let height = area.height / Double(count)
+                return (0..<count).map { index in
+                    Frame(x: area.x, y: area.y + Double(index) * height,
+                          width: area.width, height: height)
+                }
             }
         }
     }

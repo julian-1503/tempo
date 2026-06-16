@@ -180,6 +180,12 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 log("hotkey -> move tile \(direction) (no-op)")
             }
+        case .toggleTileOrientation:
+            let active = controller.active
+            let before = controller.orientation(of: active)
+            let after: Orientation = before == .horizontal ? .vertical : .horizontal
+            controller.setOrientation(after, for: active)
+            log("hotkey -> toggle orientation (\(active): \(before) -> \(after))")
         }
     }
 
