@@ -81,6 +81,16 @@ final class WindowController {
         if workspace == model.active { apply() }
     }
 
+    func mode(of workspace: WorkspaceID) -> WorkspaceMode {
+        model.mode(of: workspace)
+    }
+
+    /// Update a workspace's layout mode; reapply layout if it's the active one.
+    func setMode(_ mode: WorkspaceMode, for workspace: WorkspaceID) {
+        model.setMode(mode, for: workspace)
+        if workspace == model.active { apply() }
+    }
+
     func backAndForth() {
         model.switchBackAndForth()
         apply()
@@ -89,7 +99,11 @@ final class WindowController {
     /// Tile the active workspace's windows; push everything else off-screen.
     func apply() {
         let visible = model.visibleWindows
-        let mode: TilingMode = .tiles(model.orientation(of: model.active))
+        let active = model.active
+        let mode: TilingMode = switch model.mode(of: active) {
+        case .tiles: .tiles(model.orientation(of: active))
+        case .accordion: .accordion
+        }
         let frames = tiler.layout(count: visible.count, in: area, mode: mode)
         for (id, frame) in zip(visible, frames) {
             guard let element = elements[id] else { continue }

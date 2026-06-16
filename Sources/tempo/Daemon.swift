@@ -186,6 +186,12 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             let after: Orientation = before == .horizontal ? .vertical : .horizontal
             controller.setOrientation(after, for: active)
             log("hotkey -> toggle orientation (\(active): \(before) -> \(after))")
+        case .toggleAccordion:
+            let active = controller.active
+            let before = controller.mode(of: active)
+            let after: WorkspaceMode = before == .tiles ? .accordion : .tiles
+            controller.setMode(after, for: active)
+            log("hotkey -> toggle accordion (\(active): \(before) -> \(after))")
         }
     }
 

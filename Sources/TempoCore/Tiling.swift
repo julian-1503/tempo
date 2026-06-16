@@ -20,6 +20,13 @@ public enum Orientation: Equatable, Sendable {
     case vertical    // stacked rows
 }
 
+/// Per-workspace layout mode. Combined with `Orientation`, this determines the
+/// concrete `TilingMode` the Tiler computes for the active workspace.
+public enum WorkspaceMode: Equatable, Sendable {
+    case tiles      // N windows split evenly along the workspace's orientation
+    case accordion  // all N windows stacked at the full workspace area; focused is z-top
+}
+
 /// The tiling layout within a single workspace.
 public enum TilingMode: Equatable, Sendable {
     case tiles(Orientation)

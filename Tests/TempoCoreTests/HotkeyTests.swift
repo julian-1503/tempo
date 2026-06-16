@@ -99,4 +99,16 @@ struct HotkeyTests {
     func altShiftSlashUnbound() {
         #expect(HotkeyDecoder.decode(keyCode: kSlash, modifiers: [.option, .shift]) == nil)
     }
+
+    let kComma: UInt16 = 43
+
+    @Test("alt+comma decodes to toggleAccordion")
+    func altCommaTogglesAccordion() {
+        #expect(HotkeyDecoder.decode(keyCode: kComma, modifiers: .option) == .toggleAccordion)
+    }
+
+    @Test("alt+shift+comma returns nil")
+    func altShiftCommaUnbound() {
+        #expect(HotkeyDecoder.decode(keyCode: kComma, modifiers: [.option, .shift]) == nil)
+    }
 }

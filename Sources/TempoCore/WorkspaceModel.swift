@@ -11,6 +11,7 @@ public struct WorkspaceModel {
     /// Maintained in sync with `assignment`.
     private var order: [WorkspaceID: [WindowID]] = [:]
     private var orientations: [WorkspaceID: Orientation] = [:]
+    private var modes: [WorkspaceID: WorkspaceMode] = [:]
     private var previous: WorkspaceID?
 
     public init(active: WorkspaceID) {
@@ -72,6 +73,16 @@ public struct WorkspaceModel {
     /// Set the tile orientation of `workspace`. Persists across workspace switches.
     public mutating func setOrientation(_ orientation: Orientation, for workspace: WorkspaceID) {
         orientations[workspace] = orientation
+    }
+
+    /// The layout mode of `workspace`. Defaults to `.tiles`.
+    public func mode(of workspace: WorkspaceID) -> WorkspaceMode {
+        modes[workspace] ?? .tiles
+    }
+
+    /// Set the layout mode of `workspace`.
+    public mutating func setMode(_ mode: WorkspaceMode, for workspace: WorkspaceID) {
+        modes[workspace] = mode
     }
 
     /// The previous/next tile of `window` within its workspace's order, or nil at the

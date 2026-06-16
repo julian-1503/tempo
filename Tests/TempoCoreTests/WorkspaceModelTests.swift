@@ -183,6 +183,23 @@ struct WorkspaceModelTests {
         #expect(model.visibleWindows == [20, 10])
     }
 
+    @Test("a workspace's layout mode defaults to .tiles")
+    func defaultMode() {
+        let model = WorkspaceModel(active: "1")
+        #expect(model.mode(of: "1") == .tiles)
+        #expect(model.mode(of: "2") == .tiles)
+    }
+
+    @Test("setMode persists per-workspace and is independent across workspaces")
+    func modePersistence() {
+        var model = WorkspaceModel(active: "1")
+        model.setMode(.accordion, for: "1")
+        #expect(model.mode(of: "1") == .accordion)
+        #expect(model.mode(of: "2") == .tiles)
+        model.setMode(.tiles, for: "1")
+        #expect(model.mode(of: "1") == .tiles)
+    }
+
     @Test("placedWindows joins assignments with the info cache, sorted by workspace then id")
     func placedWindowsJoin() {
         var model = WorkspaceModel(active: "1")
