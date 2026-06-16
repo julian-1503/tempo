@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import TempoCore
 
 /// Low-level Accessibility window operations. The verified primitives the workspace
 /// engine will build on. (Dev-facing for now, exercised via `tempo debug`.)
@@ -16,6 +17,34 @@ enum AXEngine {
         guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &value) == .success,
               let windows = value as? [AXUIElement] else { return nil }
         return windows.first
+    }
+
+    /// All regular apps' windows paired with their TempoCore description.
+    static func allWindows() -> [(element: AXUIElement, info: TempoCore.WindowInfo)] {
+        var result: [(AXUIElement, TempoCore.WindowInfo)] = []
+        for app in NSWorkspace.shared.runningApplications {
+            guard app.activationPolicy == .regular, let bundleId = app.bundleIdentifier else { continue }
+            let axApp = AXUIElementCreateApplication(app.processIdentifier)
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &value) == .success,
+                  let windows = value as? [AXUIElement] else { continue }
+            for axWindow in windows {
+                var titleRef: CFTypeRef?
+                _ = AXUIElementCopyAttributeValue(axWindow, kAXTitleAttribute as CFString, &titleRef)
+                var subroleRef: CFTypeRef?
+                _ = AXUIElementCopyAttributeValue(axWindow, kAXSubroleAttribute as CFString, &subroleRef)
+                let info = TempoCore.WindowInfo(
+                    bundleId: bundleId,
+                    title: titleRef as? String ?? "",
+                    subrole: TempoCore.WindowSubrole(axValue: subroleRef as? String ?? "AXStandardWindow"))
+                result.append((axWindow, info))
+            }
+        }
+        return result
+    }
+
+    static func hideApp(bundleId: String) {
+        NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == bundleId }?.hide()
     }
 
     static func position(_ window: AXUIElement) -> CGPoint? {

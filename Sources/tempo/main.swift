@@ -72,7 +72,12 @@ case "scene":
         case "render":
             guard args.count >= 3 else { fail("usage: tempo scene render <name>") }
             print(Commands.renderScene(try store.load(args[2])))
-        case "apply", "create":
+        case "apply":
+            guard args.count >= 3 else { fail("usage: tempo scene apply <name>") }
+            guard AXIsProcessTrusted() else { fail("Accessibility permission required.", code: 5) }
+            SceneApplier.apply(try store.load(args[2]))
+            print("applied scene: \(args[2])")
+        case "create":
             fail(engineMissing, code: 3)
         default:
             fail("unknown scene command: \(sub)")
