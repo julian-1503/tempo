@@ -44,6 +44,14 @@ final class WindowController {
         apply()
     }
 
+    /// Reassign a tracked window to a different workspace and reapply layout.
+    /// No-op if the window isn't tracked.
+    func moveWindow(_ id: WindowID, to workspace: WorkspaceID) {
+        guard elements[id] != nil else { return }
+        model.move(id, to: workspace)
+        apply()
+    }
+
     func backAndForth() {
         model.switchBackAndForth()
         apply()

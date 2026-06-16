@@ -16,6 +16,8 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     private var pollTimer: DispatchSourceTimer?
     private var infos: [WindowID: WindowInfo] = [:]
     private let statePath: String = daemonStatePath()
+    private var eventTap: CFMachPort?
+    private var eventTapThread: Thread?
 
     init(fifoPath: String) { self.fifoPath = fifoPath }
 
@@ -41,6 +43,7 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         startPolling()
         setupMenuBar()
         setupFIFO()
+        startEventTap()
         log("tempo daemon started — active workspace \(controller.active), fifo \(fifoPath)")
     }
 
@@ -146,6 +149,96 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         default:
             log("unknown command: \(command)")
         }
+    }
+
+    fileprivate func handle(hotkey: Hotkey) {
+        switch hotkey {
+        case .switchWorkspace(let id):
+            controller.switchTo(id); updateMenuBar(); publishState()
+            log("hotkey -> workspace \(id)")
+        case .backAndForth:
+            controller.backAndForth(); updateMenuBar(); publishState()
+            log("hotkey -> back")
+        case .moveFocusedWindow(let target):
+            guard let focusedID = AXEngine.focusedWindowID(),
+                  controller.knownIDs.contains(focusedID) else {
+                log("hotkey -> move focused to \(target) (no managed focused window)")
+                return
+            }
+            controller.moveWindow(focusedID, to: target); publishState()
+            log("hotkey -> move focused (\(focusedID)) to \(target)")
+        }
+    }
+
+    fileprivate func reenableEventTap() {
+        guard let eventTap else { return }
+        CGEvent.tapEnable(tap: eventTap, enable: true)
+        log("event tap re-enabled")
+    }
+
+    /// Map CGEventFlags to Tempo's pure `Modifiers` set.
+    fileprivate static func modifiers(from flags: CGEventFlags) -> Modifiers {
+        var mods: Modifiers = []
+        if flags.contains(.maskAlternate)   { mods.insert(.option) }
+        if flags.contains(.maskShift)       { mods.insert(.shift) }
+        if flags.contains(.maskCommand)     { mods.insert(.command) }
+        if flags.contains(.maskControl)     { mods.insert(.control) }
+        return mods
+    }
+
+    /// Install a session event tap on a dedicated thread (NSApp's main run loop does not
+    /// service manually-added CFRunLoop sources from a CLI-launched process). Returning
+    /// `nil` from the callback consumes the event so apps never see Tempo's hotkeys.
+    private func startEventTap() {
+        let mask: CGEventMask = 1 << CGEventType.keyDown.rawValue
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        let callback: CGEventTapCallBack = { _, type, event, refcon in
+            switch type {
+            case .tapDisabledByTimeout, .tapDisabledByUserInput:
+                if let refcon {
+                    let delegate = Unmanaged<TempoAppDelegate>.fromOpaque(refcon).takeUnretainedValue()
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated { delegate.reenableEventTap() }
+                    }
+                }
+                return Unmanaged.passUnretained(event)
+            case .keyDown:
+                guard let refcon else { return Unmanaged.passUnretained(event) }
+                let delegate = Unmanaged<TempoAppDelegate>.fromOpaque(refcon).takeUnretainedValue()
+                let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+                let mods = TempoAppDelegate.modifiers(from: event.flags)
+                if let hotkey = HotkeyDecoder.decode(keyCode: keyCode, modifiers: mods) {
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated { delegate.handle(hotkey: hotkey) }
+                    }
+                    return nil
+                }
+                return Unmanaged.passUnretained(event)
+            default:
+                return Unmanaged.passUnretained(event)
+            }
+        }
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: callback,
+            userInfo: refcon
+        ) else {
+            log("CGEvent.tapCreate failed — accessibility permission may be insufficient")
+            return
+        }
+        eventTap = tap
+        let thread = Thread {
+            let source = CFMachPortCreateRunLoopSource(nil, tap, 0)
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+            CGEvent.tapEnable(tap: tap, enable: true)
+            CFRunLoopRun()
+        }
+        thread.name = "tempo.event-tap"
+        thread.start()
+        eventTapThread = thread
     }
 
     /// Atomically rewrite `state.json` with the current `[PlacedWindow]` snapshot.

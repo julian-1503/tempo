@@ -97,6 +97,25 @@ enum AXEngine {
         return TempoCore.WindowID(id)
     }
 
+    /// The user's currently focused window (the focused app's focused window), or nil.
+    static func focusedWindow() -> AXUIElement? {
+        let system = AXUIElementCreateSystemWide()
+        var appRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute as CFString, &appRef) == .success,
+              let appRef else { return nil }
+        let app = appRef as! AXUIElement
+        var winRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &winRef) == .success,
+              let winRef else { return nil }
+        return (winRef as! AXUIElement)
+    }
+
+    /// Stable id of the currently focused window, or nil.
+    static func focusedWindowID() -> TempoCore.WindowID? {
+        guard let win = focusedWindow() else { return nil }
+        return windowID(win)
+    }
+
     /// The full bounds of the main display, in the top-left global coordinates AX uses.
     static func mainDisplayArea() -> Frame {
         let bounds = CGDisplayBounds(CGMainDisplayID())
