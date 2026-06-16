@@ -23,6 +23,12 @@ final class WindowController {
     var active: WorkspaceID { model.active }
     var knownIDs: Set<WindowID> { Set(elements.keys) }
 
+    /// Snapshot every tracked window as `[PlacedWindow]`, joining the model's
+    /// assignments with the caller's WindowInfo cache. Used to publish `state.json`.
+    func placedWindows(using infos: [WindowID: WindowInfo]) -> [PlacedWindow] {
+        model.placedWindows(using: infos)
+    }
+
     func adopt(_ id: WindowID, element: AXUIElement, workspace: WorkspaceID) {
         elements[id] = element
         model.add(id, to: workspace)

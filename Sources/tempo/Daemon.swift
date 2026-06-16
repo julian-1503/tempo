@@ -14,6 +14,8 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     private let router = Router()
     private var scene: Scene?
     private var pollTimer: DispatchSourceTimer?
+    private var infos: [WindowID: WindowInfo] = [:]
+    private let statePath: String = daemonStatePath()
 
     init(fifoPath: String) { self.fifoPath = fifoPath }
 
@@ -30,9 +32,11 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
 
         for (element, info) in AXEngine.allWindows() where isManaged(info.bundleId) {
             guard let id = AXEngine.windowID(element) else { continue }
+            infos[id] = info
             controller.adopt(id, element: element, workspace: workspace(for: info))
         }
         controller.apply()
+        publishState()
 
         startPolling()
         setupMenuBar()
@@ -63,9 +67,12 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     private func poll() {
         var liveIDs = Set<WindowID>()
         var changed = false
+        var titlesChanged = false
         for (element, info) in AXEngine.allWindows() where isManaged(info.bundleId) {
             guard let id = AXEngine.windowID(element) else { continue }
             liveIDs.insert(id)
+            if infos[id] != info { titlesChanged = true }
+            infos[id] = info
             guard !controller.knownIDs.contains(id) else { continue }
             let target = workspace(for: info)
             controller.adopt(id, element: element, workspace: target)
@@ -75,9 +82,11 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         }
         for id in controller.knownIDs.subtracting(liveIDs) {
             controller.forget(id)
+            infos[id] = nil
             changed = true
         }
         if changed { controller.apply() }
+        if changed || titlesChanged { publishState() }
     }
 
     private func isManaged(_ bundleId: String) -> Bool {
@@ -129,13 +138,28 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         let parts = command.split(separator: " ").map(String.init)
         switch parts.first {
         case "workspace" where parts.count >= 2:
-            controller.switchTo(parts[1]); updateMenuBar(); log("-> workspace \(parts[1])")
+            controller.switchTo(parts[1]); updateMenuBar(); publishState(); log("-> workspace \(parts[1])")
         case "back":
-            controller.backAndForth(); updateMenuBar(); log("-> back")
+            controller.backAndForth(); updateMenuBar(); publishState(); log("-> back")
         case "quit":
             quit()
         default:
             log("unknown command: \(command)")
+        }
+    }
+
+    /// Atomically rewrite `state.json` with the current `[PlacedWindow]` snapshot.
+    /// Consumed by `tempo scene create --from-current` and by external tools.
+    private func publishState() {
+        do {
+            let data = try Placements.encodeJSON(controller.placedWindows(using: infos))
+            let final = URL(fileURLWithPath: statePath)
+            let tmp = final.deletingLastPathComponent()
+                .appendingPathComponent(".\(final.lastPathComponent).tmp")
+            try data.write(to: tmp, options: .atomic)
+            _ = try? FileManager.default.replaceItemAt(final, withItemAt: tmp)
+        } catch {
+            log("publishState failed: \(error)")
         }
     }
 
