@@ -18,18 +18,45 @@ public enum Commands {
     public static func sceneFromPlacements(_ placements: [PlacedWindow],
                                            name: String,
                                            hideUnassigned: Bool = true) -> Scene {
-        var seen = Set<String>()
-        var pairs: [(bundleId: String, workspace: WorkspaceID)] = []
+        // First pass: collect every workspace each bundle appears on.
+        var workspacesByBundle: [String: Set<WorkspaceID>] = [:]
         for placement in placements {
-            let key = placement.window.bundleId + "\u{0}" + placement.workspace
+            workspacesByBundle[placement.window.bundleId, default: []].insert(placement.workspace)
+        }
+
+        // Second pass: a bundle on multiple workspaces needs title-based discrimination;
+        // a bundle on one workspace can use the broader bundleId-only matcher.
+        var assignments: [Assignment] = []
+        var seen = Set<String>()
+        for placement in placements {
+            let bundleId = placement.window.bundleId
+            let workspace = placement.workspace
+            let multiWorkspace = (workspacesByBundle[bundleId]?.count ?? 0) > 1
+            let match: WindowMatch
+            let key: String
+            if multiWorkspace {
+                let title = placement.window.title
+                if title.isEmpty { continue }
+                let regex = NSRegularExpression.escapedPattern(for: title)
+                match = WindowMatch(bundleId: bundleId, titleRegex: regex)
+                key = "\(bundleId)\u{0}\(regex)\u{0}\(workspace)"
+            } else {
+                match = WindowMatch(bundleId: bundleId)
+                key = "\(bundleId)\u{0}\(workspace)"
+            }
             if seen.insert(key).inserted {
-                pairs.append((placement.window.bundleId, placement.workspace))
+                assignments.append(Assignment(match: match, workspace: workspace))
             }
         }
-        let assignments = pairs
-            .sorted { ($0.workspace, $0.bundleId) < ($1.workspace, $1.bundleId) }
-            .map { Assignment(match: WindowMatch(bundleId: $0.bundleId), workspace: $0.workspace) }
-        return Scene(name: name, assignments: assignments, hideUnassigned: hideUnassigned)
+
+        let sorted = assignments.sorted { a, b in
+            if a.workspace != b.workspace { return a.workspace < b.workspace }
+            let ab = a.match.bundleId ?? ""
+            let bb = b.match.bundleId ?? ""
+            if ab != bb { return ab < bb }
+            return (a.match.titleRegex ?? "") < (b.match.titleRegex ?? "")
+        }
+        return Scene(name: name, assignments: sorted, hideUnassigned: hideUnassigned)
     }
 
     /// Snapshot the live daemon state (encoded by `Placements.encodeJSON`) into a saved Scene.
