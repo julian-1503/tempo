@@ -52,6 +52,22 @@ enum AXEngine {
         NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == bundleId }?.hide()
     }
 
+    /// Describe a single window element (resolving its app's bundle id via the owning pid).
+    static func windowInfo(_ window: AXUIElement) -> TempoCore.WindowInfo? {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(window, &pid) == .success,
+              let app = NSRunningApplication(processIdentifier: pid),
+              let bundleId = app.bundleIdentifier else { return nil }
+        var titleRef: CFTypeRef?
+        _ = AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleRef)
+        var subroleRef: CFTypeRef?
+        _ = AXUIElementCopyAttributeValue(window, kAXSubroleAttribute as CFString, &subroleRef)
+        return TempoCore.WindowInfo(
+            bundleId: bundleId,
+            title: titleRef as? String ?? "",
+            subrole: TempoCore.WindowSubrole(axValue: subroleRef as? String ?? "AXStandardWindow"))
+    }
+
     static func position(_ window: AXUIElement) -> CGPoint? {
         axValue(window, kAXPositionAttribute, type: .cgPoint, default: CGPoint.zero)
     }

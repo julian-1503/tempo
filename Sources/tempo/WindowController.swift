@@ -21,10 +21,16 @@ final class WindowController {
     }
 
     var active: WorkspaceID { model.active }
+    var knownIDs: Set<WindowID> { Set(elements.keys) }
 
     func adopt(_ id: WindowID, element: AXUIElement, workspace: WorkspaceID) {
         elements[id] = element
         model.add(id, to: workspace)
+    }
+
+    func forget(_ id: WindowID) {
+        elements[id] = nil
+        model.remove(id)
     }
 
     func switchTo(_ workspace: WorkspaceID) {

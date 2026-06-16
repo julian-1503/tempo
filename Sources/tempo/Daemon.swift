@@ -11,6 +11,9 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     private var fifoSource: DispatchSourceRead?
     private var fifoFD: Int32 = -1
     private let fifoPath: String
+    private let router = Router()
+    private var scene: Scene?
+    private var pollTimer: DispatchSourceTimer?
 
     init(fifoPath: String) { self.fifoPath = fifoPath }
 
@@ -21,24 +24,60 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let scene = loadStartupScene()
+        scene = loadStartupScene()
         let active = scene?.focusWorkspace ?? "1"
         controller = WindowController(active: active, area: AXEngine.mainDisplayArea())
 
-        let router = Router()
         for (element, info) in AXEngine.allWindows() where isManaged(info.bundleId) {
             guard let id = AXEngine.windowID(element) else { continue }
-            var workspace = active
-            if let scene, case let .route(target, _, _) = router.decide(for: info, scene: scene, activeWorkspace: active) {
-                workspace = target
-            }
-            controller.adopt(id, element: element, workspace: workspace)
+            controller.adopt(id, element: element, workspace: workspace(for: info))
         }
         controller.apply()
 
+        startPolling()
         setupMenuBar()
         setupFIFO()
         log("tempo daemon started — active workspace \(controller.active), fifo \(fifoPath)")
+    }
+
+    /// Where a window belongs under the current Scene (active workspace if unmatched).
+    private func workspace(for info: WindowInfo) -> WorkspaceID {
+        guard let scene,
+              case let .route(target, _, _) = router.decide(for: info, scene: scene, activeWorkspace: controller.active)
+        else { return controller.active }
+        return target
+    }
+
+    /// Poll for window changes. New windows of managed apps are routed silently (the active
+    /// workspace never changes — the anti-leak guarantee); closed windows are forgotten.
+    private func startPolling() {
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 0.4, repeating: 0.4)
+        timer.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.poll() }
+        }
+        timer.resume()
+        pollTimer = timer
+    }
+
+    private func poll() {
+        var liveIDs = Set<WindowID>()
+        var changed = false
+        for (element, info) in AXEngine.allWindows() where isManaged(info.bundleId) {
+            guard let id = AXEngine.windowID(element) else { continue }
+            liveIDs.insert(id)
+            guard !controller.knownIDs.contains(id) else { continue }
+            let target = workspace(for: info)
+            controller.adopt(id, element: element, workspace: target)
+            changed = true
+            log("new window \(info.bundleId) [\(info.title)] -> workspace \(target)" +
+                (target == controller.active ? "" : " (filed, focus kept)"))
+        }
+        for id in controller.knownIDs.subtracting(liveIDs) {
+            controller.forget(id)
+            changed = true
+        }
+        if changed { controller.apply() }
     }
 
     private func isManaged(_ bundleId: String) -> Bool {
