@@ -51,6 +51,31 @@ struct CommandsTests {
         ], hideUnassigned: true))
     }
 
+    @Test("scene create from state JSON decodes placements, builds the scene, saves it")
+    func sceneCreateFromState() throws {
+        let store = try tempStore()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let placements = [
+            PlacedWindow(window: WindowInfo(bundleId: "com.apple.mail",
+                                            title: "Inbox",
+                                            subrole: .standardWindow),
+                         workspace: "5"),
+            PlacedWindow(window: WindowInfo(bundleId: "com.brave.Browser",
+                                            title: "ChatGPT",
+                                            subrole: .standardWindow),
+                         workspace: "C"),
+        ]
+        let stateData = try Placements.encodeJSON(placements)
+
+        try Commands.sceneCreate(fromState: stateData, name: "morning", store: store)
+
+        let loaded = try store.load("morning")
+        #expect(loaded == Scene(name: "morning", assignments: [
+            Assignment(match: WindowMatch(bundleId: "com.apple.mail"), workspace: "5"),
+            Assignment(match: WindowMatch(bundleId: "com.brave.Browser"), workspace: "C"),
+        ], hideUnassigned: true))
+    }
+
     @Test("lists scene names as text and as json")
     func listsScenes() throws {
         let store = try tempStore()

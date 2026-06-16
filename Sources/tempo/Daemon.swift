@@ -165,6 +165,12 @@ func daemonFIFOPath() -> String {
     daemonBaseDirectory() + "/tempo.cmd"
 }
 
+/// File the daemon atomically rewrites with the current `[PlacedWindow]` JSON on every state change.
+/// Consumed by `scene create --from-current`; absence implies the daemon isn't running.
+func daemonStatePath() -> String {
+    daemonBaseDirectory() + "/state.json"
+}
+
 @discardableResult
 func sendDaemonCommand(_ command: String) -> Bool {
     let fd = open(daemonFIFOPath(), O_WRONLY | O_NONBLOCK)

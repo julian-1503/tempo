@@ -32,6 +32,15 @@ public enum Commands {
         return Scene(name: name, assignments: assignments, hideUnassigned: hideUnassigned)
     }
 
+    /// Snapshot the live daemon state (encoded by `Placements.encodeJSON`) into a saved Scene.
+    /// Pure: I/O is delegated to the injected `SceneStore`.
+    public static func sceneCreate(fromState data: Data,
+                                   name: String,
+                                   store: SceneStore) throws {
+        let placements = try Placements.decodeJSON(data)
+        try store.save(sceneFromPlacements(placements, name: name))
+    }
+
     public static func renderScene(_ scene: Scene) -> String {
         var lines = ["Scene: \(scene.name)" + (scene.hideUnassigned ? " [hide unassigned]" : "")]
         let sorted = scene.assignments.sorted {

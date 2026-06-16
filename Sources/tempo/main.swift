@@ -78,7 +78,15 @@ case "scene":
             SceneApplier.apply(try store.load(args[2]))
             print("applied scene: \(args[2])")
         case "create":
-            fail(engineMissing, code: 3)
+            guard args.count >= 4, args[2] == "--from-current" else {
+                fail("usage: tempo scene create --from-current <name>")
+            }
+            let name = args[3]
+            guard let stateData = try? Data(contentsOf: URL(fileURLWithPath: daemonStatePath())) else {
+                fail("tempo daemon is not running (no state file at \(daemonStatePath()))", code: 6)
+            }
+            try Commands.sceneCreate(fromState: stateData, name: name, store: store)
+            print("created scene: \(name)")
         default:
             fail("unknown scene command: \(sub)")
         }
