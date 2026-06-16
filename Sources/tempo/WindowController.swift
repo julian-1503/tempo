@@ -57,21 +57,44 @@ final class WindowController {
 
     /// Move keyboard focus to the neighboring tile within the active workspace.
     /// Returns true if focus moved, false on a no-op (no managed focus, no neighbor, vertical).
+    /// Auto-exits fullscreen so the focused window is actually visible.
     func focusTile(_ direction: Direction) -> Bool {
         guard let focused = AXEngine.focusedWindowID(),
               let target = model.neighbor(of: focused, direction: direction),
               let element = elements[target] else { return false }
+        if model.fullscreen(in: model.active) != nil {
+            model.clearFullscreen(in: model.active)
+            apply()
+        }
         AXEngine.focus(element)
         return true
     }
 
     /// Swap the focused tile with its neighbor in the tile order and reapply layout.
-    /// Returns true if a swap happened.
+    /// Returns true if a swap happened. Auto-exits fullscreen so the rearrangement is visible.
     func moveTile(_ direction: Direction) -> Bool {
         guard let focused = AXEngine.focusedWindowID(),
               model.swapWithNeighbor(focused, direction: direction) else { return false }
+        model.clearFullscreen(in: model.active)
         apply()
         return true
+    }
+
+    /// Toggle fullscreen for the focused window (must be in the active workspace).
+    /// Returns the new state as a label ("set" / "cleared") on success, nil on no-op.
+    func toggleFullscreen() -> String? {
+        let active = model.active
+        guard let focused = AXEngine.focusedWindowID(),
+              model.workspace(of: focused) == active,
+              elements[focused] != nil else { return nil }
+        if model.fullscreen(in: active) == focused {
+            model.clearFullscreen(in: active)
+            apply()
+            return "cleared"
+        }
+        model.setFullscreen(focused, in: active)
+        apply()
+        return "set on \(focused)"
     }
 
     func orientation(of workspace: WorkspaceID) -> Orientation {
@@ -101,13 +124,28 @@ final class WindowController {
 
     /// Tile the active workspace's non-floating windows; push hidden ones off-screen;
     /// keep floats wherever they were and restore from cache when they re-enter view.
+    /// Fullscreen takes precedence: when set, only the fullscreen window is visible at the
+    /// full workspace area; everything else (tiles, floats, other workspaces) is hidden.
     func apply() {
         let active = model.active
 
         // 1. Snapshot every on-screen float's current frame (user may have dragged it).
         captureFloatFrames()
 
-        // 2. Tile the active workspace's non-floating windows.
+        // 2a. Fullscreen short-circuit: one window owns the whole area, everything else hides.
+        if let fs = model.fullscreen(in: active), let fsElement = elements[fs] {
+            AXEngine.setSize(fsElement, CGSize(width: area.width, height: area.height))
+            AXEngine.setPosition(fsElement, CGPoint(x: area.x, y: area.y))
+            AXEngine.setSize(fsElement, CGSize(width: area.width, height: area.height))
+            AXEngine.focus(fsElement)
+            for id in elements.keys where id != fs {
+                guard let element = elements[id] else { continue }
+                AXEngine.setPosition(element, offScreen)
+            }
+            return
+        }
+
+        // 2b. Tile the active workspace's non-floating windows.
         let tiled = model.tiledWindows(in: active)
         let mode: TilingMode = switch model.mode(of: active) {
         case .tiles: .tiles(model.orientation(of: active))

@@ -111,4 +111,16 @@ struct HotkeyTests {
     func altShiftCommaUnbound() {
         #expect(HotkeyDecoder.decode(keyCode: kComma, modifiers: [.option, .shift]) == nil)
     }
+
+    let kF: UInt16 = 3
+
+    @Test("alt+shift+f decodes to toggleFullscreen (not moveFocusedWindow F)")
+    func altShiftFFullscreen() {
+        #expect(HotkeyDecoder.decode(keyCode: kF, modifiers: [.option, .shift]) == .toggleFullscreen)
+    }
+
+    @Test("alt+f still switches to workspace F")
+    func altFSwitchWorkspace() {
+        #expect(HotkeyDecoder.decode(keyCode: kF, modifiers: .option) == .switchWorkspace("F"))
+    }
 }

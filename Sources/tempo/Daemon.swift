@@ -209,6 +209,12 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             let after: WorkspaceMode = before == .tiles ? .accordion : .tiles
             controller.setMode(after, for: active)
             log("hotkey -> toggle accordion (\(active): \(before) -> \(after))")
+        case .toggleFullscreen:
+            if let action = controller.toggleFullscreen() {
+                log("hotkey -> fullscreen \(action)")
+            } else {
+                log("hotkey -> fullscreen (no managed focused window in active workspace)")
+            }
         }
     }
 

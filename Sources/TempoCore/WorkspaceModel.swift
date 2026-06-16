@@ -13,6 +13,8 @@ public struct WorkspaceModel {
     private var orientations: [WorkspaceID: Orientation] = [:]
     private var modes: [WorkspaceID: WorkspaceMode] = [:]
     private var floats: Set<WindowID> = []
+    /// Per-workspace fullscreen pointer: at most one window per workspace fills the area.
+    private var fullscreens: [WorkspaceID: WindowID] = [:]
     private var previous: WorkspaceID?
 
     public init(active: WorkspaceID) {
@@ -36,6 +38,9 @@ public struct WorkspaceModel {
         }
         assignment[window] = nil
         floats.remove(window)
+        for (ws, fs) in fullscreens where fs == window {
+            fullscreens[ws] = nil
+        }
     }
 
     /// Reassign `window` to `workspace`. Same insertion semantics as `add`.
@@ -105,6 +110,26 @@ public struct WorkspaceModel {
     /// Floating windows in `workspace`, in tile order.
     public func floatingWindows(in workspace: WorkspaceID) -> [WindowID] {
         (order[workspace] ?? []).filter { floats.contains($0) }
+    }
+
+    /// Which workspace, if any, `window` belongs to.
+    public func workspace(of window: WindowID) -> WorkspaceID? {
+        assignment[window]
+    }
+
+    /// The fullscreen window of `workspace`, or nil.
+    public func fullscreen(in workspace: WorkspaceID) -> WindowID? {
+        fullscreens[workspace]
+    }
+
+    /// Set `window` as the fullscreen tile of `workspace`. Replaces any prior fullscreen.
+    public mutating func setFullscreen(_ window: WindowID, in workspace: WorkspaceID) {
+        fullscreens[workspace] = window
+    }
+
+    /// Clear any fullscreen pointer for `workspace`.
+    public mutating func clearFullscreen(in workspace: WorkspaceID) {
+        fullscreens[workspace] = nil
     }
 
     /// The previous/next tile of `window` within its workspace's order, or nil at the

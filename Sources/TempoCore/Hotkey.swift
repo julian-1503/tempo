@@ -27,6 +27,8 @@ public enum Hotkey: Equatable, Sendable {
     case toggleTileOrientation
     /// Toggle the active workspace's layout mode between tiles and accordion.
     case toggleAccordion
+    /// Toggle fullscreen for the focused window in the active workspace.
+    case toggleFullscreen
 }
 
 /// Pure mapping from (keyCode, modifiers) to a `Hotkey`. v1 binding scheme:
@@ -50,6 +52,11 @@ public enum HotkeyDecoder {
             return modifiers.contains(.shift) ? .moveTile(direction)
                                               : .focusTile(direction)
         }
+        // alt+shift+f wins over move-to-workspace-F so AeroSpace's fullscreen muscle
+        // memory carries over. alt+f still switches to workspace F.
+        if keyCode == kF && modifiers.contains(.shift) {
+            return .toggleFullscreen
+        }
         guard let label = workspaceLabel(forKeyCode: keyCode) else { return nil }
         return modifiers.contains(.shift) ? .moveFocusedWindow(label)
                                           : .switchWorkspace(label)
@@ -58,6 +65,7 @@ public enum HotkeyDecoder {
     private static let kTab: UInt16 = 48
     private static let kSlash: UInt16 = 44
     private static let kComma: UInt16 = 43
+    private static let kF: UInt16 = 3
 
     /// Vim-style HJKL → tile direction. H/J/K/L are intentionally omitted from
     /// `labels` so they reach this map first.

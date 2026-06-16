@@ -237,6 +237,52 @@ struct WorkspaceModelTests {
         #expect(model.isFloating(10) == false)
     }
 
+    @Test("workspace(of:) returns the workspace assignment, or nil for unknown windows")
+    func workspaceOf() {
+        var model = WorkspaceModel(active: "1")
+        model.add(10, to: "1")
+        model.add(20, to: "2")
+        #expect(model.workspace(of: 10) == "1")
+        #expect(model.workspace(of: 20) == "2")
+        #expect(model.workspace(of: 99) == nil)
+    }
+
+    @Test("a workspace has no fullscreen window by default")
+    func defaultNoFullscreen() {
+        let model = WorkspaceModel(active: "1")
+        #expect(model.fullscreen(in: "1") == nil)
+    }
+
+    @Test("setFullscreen + clearFullscreen track the per-workspace pointer")
+    func setClearFullscreen() {
+        var model = WorkspaceModel(active: "1")
+        model.add(10, to: "1")
+        model.setFullscreen(10, in: "1")
+        #expect(model.fullscreen(in: "1") == 10)
+        model.clearFullscreen(in: "1")
+        #expect(model.fullscreen(in: "1") == nil)
+    }
+
+    @Test("fullscreen pointers are independent across workspaces")
+    func fullscreenIndependent() {
+        var model = WorkspaceModel(active: "1")
+        model.add(10, to: "1")
+        model.add(20, to: "2")
+        model.setFullscreen(10, in: "1")
+        model.setFullscreen(20, in: "2")
+        #expect(model.fullscreen(in: "1") == 10)
+        #expect(model.fullscreen(in: "2") == 20)
+    }
+
+    @Test("removing a window clears any workspace's fullscreen pointer that referenced it")
+    func removeClearsFullscreen() {
+        var model = WorkspaceModel(active: "1")
+        model.add(10, to: "1")
+        model.setFullscreen(10, in: "1")
+        model.remove(10)
+        #expect(model.fullscreen(in: "1") == nil)
+    }
+
     @Test("placedWindows joins assignments with the info cache, sorted by workspace then id")
     func placedWindowsJoin() {
         var model = WorkspaceModel(active: "1")
