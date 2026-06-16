@@ -1,4 +1,5 @@
 import Foundation
+import ApplicationServices
 import TempoCore
 
 let version = "0.0.1"
@@ -80,6 +81,30 @@ case "scene":
         fail("scene not found: \(name)", code: 4)
     } catch {
         fail("error: \(error)")
+    }
+
+case "debug":
+    guard AXIsProcessTrusted() else { fail("Accessibility permission required.", code: 5) }
+    guard args.count >= 3 else { fail("usage: tempo debug <winpos|move> <bundleId> [x y]") }
+    let sub = args[1]
+    let bundleId = args[2]
+    guard let window = AXEngine.firstWindow(bundleId: bundleId) else {
+        fail("no window found for \(bundleId)", code: 4)
+    }
+    switch sub {
+    case "winpos":
+        let p = AXEngine.position(window) ?? .zero
+        let s = AXEngine.size(window) ?? .zero
+        print("\(Int(p.x)) \(Int(p.y)) \(Int(s.width)) \(Int(s.height))")
+    case "move":
+        guard args.count >= 5, let x = Double(args[3]), let y = Double(args[4]) else {
+            fail("usage: tempo debug move <bundleId> <x> <y>", code: 2)
+        }
+        let ok = AXEngine.setPosition(window, CGPoint(x: x, y: y))
+        let p = AXEngine.position(window) ?? .zero
+        print(ok ? "moved -> \(Int(p.x)) \(Int(p.y))" : "move failed")
+    default:
+        fail("unknown debug command: \(sub)")
     }
 
 case "help", "--help", nil:
