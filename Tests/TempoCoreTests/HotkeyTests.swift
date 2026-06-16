@@ -59,18 +59,28 @@ struct HotkeyTests {
     let kK: UInt16 = 40
     let kL: UInt16 = 37
 
-    @Test("h/j/k/l do NOT jump to workspace (reserved for focus-tile, AeroSpace-compat)")
-    func hjklReservedForFocus() {
-        for kc in [kH, kJ, kK, kL] {
-            #expect(HotkeyDecoder.decode(keyCode: kc, modifiers: .option) == nil)
-        }
+    @Test("alt+h and alt+l decode to focusTile .left / .right")
+    func altFocusHL() {
+        #expect(HotkeyDecoder.decode(keyCode: kH, modifiers: .option) == .focusTile(.left))
+        #expect(HotkeyDecoder.decode(keyCode: kL, modifiers: .option) == .focusTile(.right))
     }
 
-    @Test("alt+shift+h/j/k/l do NOT move to workspace (reserved for move-tile, AeroSpace-compat)")
-    func hjklReservedForMove() {
-        for kc in [kH, kJ, kK, kL] {
-            #expect(HotkeyDecoder.decode(keyCode: kc, modifiers: [.option, .shift]) == nil)
-        }
+    @Test("alt+j and alt+k decode to focusTile .down / .up (handler responsible for no-op)")
+    func altFocusJK() {
+        #expect(HotkeyDecoder.decode(keyCode: kJ, modifiers: .option) == .focusTile(.down))
+        #expect(HotkeyDecoder.decode(keyCode: kK, modifiers: .option) == .focusTile(.up))
+    }
+
+    @Test("alt+shift+h and alt+shift+l decode to moveTile .left / .right")
+    func altShiftMoveHL() {
+        #expect(HotkeyDecoder.decode(keyCode: kH, modifiers: [.option, .shift]) == .moveTile(.left))
+        #expect(HotkeyDecoder.decode(keyCode: kL, modifiers: [.option, .shift]) == .moveTile(.right))
+    }
+
+    @Test("alt+shift+j and alt+shift+k decode to moveTile .down / .up")
+    func altShiftMoveJK() {
+        #expect(HotkeyDecoder.decode(keyCode: kJ, modifiers: [.option, .shift]) == .moveTile(.down))
+        #expect(HotkeyDecoder.decode(keyCode: kK, modifiers: [.option, .shift]) == .moveTile(.up))
     }
 
     @Test("alt+shift+tab is NOT back-and-forth (reserved for move-workspace-to-monitor, N/A here)")

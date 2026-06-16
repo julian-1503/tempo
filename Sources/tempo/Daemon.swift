@@ -167,6 +167,19 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             }
             controller.moveWindow(focusedID, to: target); publishState()
             log("hotkey -> move focused (\(focusedID)) to \(target)")
+        case .focusTile(let direction):
+            if controller.focusTile(direction) {
+                log("hotkey -> focus tile \(direction)")
+            } else {
+                log("hotkey -> focus tile \(direction) (no-op)")
+            }
+        case .moveTile(let direction):
+            if controller.moveTile(direction) {
+                publishState()
+                log("hotkey -> move tile \(direction)")
+            } else {
+                log("hotkey -> move tile \(direction) (no-op)")
+            }
         }
     }
 

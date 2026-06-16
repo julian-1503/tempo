@@ -52,6 +52,25 @@ final class WindowController {
         apply()
     }
 
+    /// Move keyboard focus to the neighboring tile within the active workspace.
+    /// Returns true if focus moved, false on a no-op (no managed focus, no neighbor, vertical).
+    func focusTile(_ direction: Direction) -> Bool {
+        guard let focused = AXEngine.focusedWindowID(),
+              let target = model.neighbor(of: focused, direction: direction),
+              let element = elements[target] else { return false }
+        AXEngine.focus(element)
+        return true
+    }
+
+    /// Swap the focused tile with its neighbor in the tile order and reapply layout.
+    /// Returns true if a swap happened.
+    func moveTile(_ direction: Direction) -> Bool {
+        guard let focused = AXEngine.focusedWindowID(),
+              model.swapWithNeighbor(focused, direction: direction) else { return false }
+        apply()
+        return true
+    }
+
     func backAndForth() {
         model.switchBackAndForth()
         apply()

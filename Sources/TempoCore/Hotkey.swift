@@ -19,6 +19,10 @@ public enum Hotkey: Equatable, Sendable {
     case moveFocusedWindow(WorkspaceID)
     /// Return to the previously active workspace.
     case backAndForth
+    /// Move focus to the neighboring tile in the given direction within the active workspace.
+    case focusTile(Direction)
+    /// Swap the focused tile with its neighbor in the given direction.
+    case moveTile(Direction)
 }
 
 /// Pure mapping from (keyCode, modifiers) to a `Hotkey`. v1 binding scheme:
@@ -32,12 +36,25 @@ public enum HotkeyDecoder {
         if keyCode == kTab {
             return modifiers.contains(.shift) ? nil : .backAndForth
         }
+        if let direction = tileDirections[keyCode] {
+            return modifiers.contains(.shift) ? .moveTile(direction)
+                                              : .focusTile(direction)
+        }
         guard let label = workspaceLabel(forKeyCode: keyCode) else { return nil }
         return modifiers.contains(.shift) ? .moveFocusedWindow(label)
                                           : .switchWorkspace(label)
     }
 
     private static let kTab: UInt16 = 48
+
+    /// Vim-style HJKL → tile direction. H/J/K/L are intentionally omitted from
+    /// `labels` so they reach this map first.
+    private static let tileDirections: [UInt16: Direction] = [
+        4: .left,    // H
+        38: .down,   // J
+        40: .up,     // K
+        37: .right,  // L
+    ]
 
     /// macOS virtual key codes for the digits 0–9 and letters A–Z mapped to their canonical
     /// workspace label string. Workspaces are identified by their key glyph (CONTEXT.md).

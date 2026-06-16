@@ -116,6 +116,15 @@ enum AXEngine {
         return windowID(win)
     }
 
+    /// Bring `window`'s owning app forward and ask AX to make this its main/focused window.
+    static func focus(_ window: AXUIElement) {
+        AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(window, &pid) == .success else { return }
+        NSRunningApplication(processIdentifier: pid)?.activate()
+    }
+
     /// The full bounds of the main display, in the top-left global coordinates AX uses.
     static func mainDisplayArea() -> Frame {
         let bounds = CGDisplayBounds(CGMainDisplayID())
