@@ -13,12 +13,16 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     private let fifoPath: String
     private let router = Router()
     private var scene: Scene?
-    private var pollTimer: DispatchSourceTimer?
     private var infos: [WindowID: WindowInfo] = [:]
     private let statePath: String = daemonStatePath()
     private var eventTap: CFMachPort?
     private var eventTapThread: Thread?
     private let config: Config = loadDaemonConfig()
+    private var axObserverThread: Thread?
+    private let axHandle = AXThreadHandle()
+    private var appObservers: [pid_t: AXObserver] = [:]
+    private var workspaceLaunchObserver: NSObjectProtocol?
+    private var workspaceTermObserver: NSObjectProtocol?
 
     init(fifoPath: String) { self.fifoPath = fifoPath }
 
@@ -33,16 +37,10 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         let active = scene?.focusWorkspace ?? config.defaultWorkspace ?? "1"
         controller = WindowController(active: active, area: AXEngine.mainDisplayArea())
 
-        for (element, info) in AXEngine.allWindows() where isManaged(info.bundleId) {
-            guard let id = AXEngine.windowID(element) else { continue }
-            infos[id] = info
-            controller.adopt(id, element: element, workspace: workspace(for: info))
-            if shouldFloat(info) { controller.markFloating(id, true) }
-        }
+        setupAXObservers()
         controller.apply()
         publishState()
 
-        startPolling()
         setupMenuBar()
         setupFIFO()
         startEventTap()
@@ -71,43 +69,142 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Poll for window changes. New windows of managed apps are routed silently (the active
-    /// workspace never changes — the anti-leak guarantee); closed windows are forgotten.
-    private func startPolling() {
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + 0.4, repeating: 0.4)
-        timer.setEventHandler { [weak self] in
-            MainActor.assumeIsolated { self?.poll() }
+    /// Install per-app AXObservers on a dedicated CFRunLoop thread (the gotcha-proven
+    /// pattern from the event tap: NSApp's main run loop doesn't service manually-added
+    /// CFRunLoop sources from a CLI-launched process). Enumerates the existing windows
+    /// of every running app, then sits and watches for create/destroy/title events.
+    private func setupAXObservers() {
+        let handle = axHandle
+        let thread = Thread {
+            handle.runLoop = CFRunLoopGetCurrent()
+            handle.ready.signal()
+            // Keep the run loop alive even with no observers — add a no-op port source.
+            let port = CFRunLoopSourceCreate(nil, 0, &handle.noopSourceContext)
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), port, .defaultMode)
+            CFRunLoopRun()
         }
-        timer.resume()
-        pollTimer = timer
+        thread.name = "tempo.ax-observer"
+        thread.start()
+        axObserverThread = thread
+        _ = handle.ready.wait(timeout: .now() + 1.0)
+
+        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
+            addAppObserver(for: app)
+            enumerateExistingWindows(of: app, applyAndPublish: false)
+        }
+
+        let nc = NSWorkspace.shared.notificationCenter
+        workspaceLaunchObserver = nc.addObserver(
+            forName: NSWorkspace.didLaunchApplicationNotification,
+            object: nil, queue: .main
+        ) { [weak self] note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            else { return }
+            // Give the launching app a moment to finish bringing up its AX tree.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                MainActor.assumeIsolated {
+                    self?.addAppObserver(for: app)
+                    self?.enumerateExistingWindows(of: app, applyAndPublish: true)
+                }
+            }
+        }
+        workspaceTermObserver = nc.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification,
+            object: nil, queue: .main
+        ) { [weak self] note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            else { return }
+            MainActor.assumeIsolated { self?.appObservers[app.processIdentifier] = nil }
+        }
     }
 
-    private func poll() {
-        var liveIDs = Set<WindowID>()
-        var changed = false
-        var titlesChanged = false
-        for (element, info) in AXEngine.allWindows() where isManaged(info.bundleId) {
-            guard let id = AXEngine.windowID(element) else { continue }
-            liveIDs.insert(id)
-            if infos[id] != info { titlesChanged = true }
-            infos[id] = info
-            guard !controller.knownIDs.contains(id) else { continue }
-            let target = workspace(for: info)
-            controller.adopt(id, element: element, workspace: target)
-            if shouldFloat(info) { controller.markFloating(id, true) }
-            changed = true
-            let floatTag = shouldFloat(info) ? " (floating)" : ""
-            log("new window \(info.bundleId) [\(info.title)] -> workspace \(target)" +
-                (target == controller.active ? "" : " (filed, focus kept)") + floatTag)
+    private func addAppObserver(for app: NSRunningApplication) {
+        let pid = app.processIdentifier
+        guard appObservers[pid] == nil else { return }
+        var observer: AXObserver?
+        guard AXObserverCreate(pid, axObserverCallback, &observer) == .success,
+              let obs = observer else { return }
+        let appElement = AXUIElementCreateApplication(pid)
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        AXObserverAddNotification(obs, appElement, kAXWindowCreatedNotification as CFString, refcon)
+        if let rl = axHandle.runLoop {
+            CFRunLoopAddSource(rl, AXObserverGetRunLoopSource(obs), .defaultMode)
         }
-        for id in controller.knownIDs.subtracting(liveIDs) {
+        appObservers[pid] = obs
+    }
+
+    private func enumerateExistingWindows(of app: NSRunningApplication, applyAndPublish: Bool) {
+        let pid = app.processIdentifier
+        let appElement = AXUIElementCreateApplication(pid)
+        var windowsRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+              let windows = windowsRef as? [AXUIElement] else { return }
+        var adopted = false
+        for window in windows {
+            if adoptWindow(window, applyAndPublish: false) { adopted = true }
+        }
+        if applyAndPublish && adopted {
+            controller.apply()
+            publishState()
+        }
+    }
+
+    @discardableResult
+    private func adoptWindow(_ element: AXUIElement, applyAndPublish: Bool) -> Bool {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success,
+              let app = NSRunningApplication(processIdentifier: pid),
+              let bundleId = app.bundleIdentifier,
+              isManaged(bundleId),
+              let id = AXEngine.windowID(element),
+              !controller.knownIDs.contains(id),
+              let info = AXEngine.windowInfo(element)
+        else { return false }
+
+        infos[id] = info
+        let target = workspace(for: info)
+        controller.adopt(id, element: element, workspace: target)
+        if shouldFloat(info) { controller.markFloating(id, true) }
+        subscribeWindowEvents(element: element, pid: pid)
+
+        let floatTag = shouldFloat(info) ? " (floating)" : ""
+        log("new window \(info.bundleId) [\(info.title)] -> workspace \(target)" +
+            (target == controller.active ? "" : " (filed, focus kept)") + floatTag)
+
+        if applyAndPublish {
+            controller.apply()
+            publishState()
+        }
+        return true
+    }
+
+    private func subscribeWindowEvents(element: AXUIElement, pid: pid_t) {
+        guard let observer = appObservers[pid] else { return }
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        AXObserverAddNotification(observer, element, kAXUIElementDestroyedNotification as CFString, refcon)
+        AXObserverAddNotification(observer, element, kAXTitleChangedNotification as CFString, refcon)
+    }
+
+    fileprivate func handleAXNotification(name: String, element: AXUIElement) {
+        switch name {
+        case kAXWindowCreatedNotification:
+            adoptWindow(element, applyAndPublish: true)
+        case kAXUIElementDestroyedNotification:
+            guard let id = controller.windowID(matching: element) else { return }
             controller.forget(id)
             infos[id] = nil
-            changed = true
+            controller.apply()
+            publishState()
+            log("window closed -> id \(id) forgotten")
+        case kAXTitleChangedNotification:
+            guard let id = controller.windowID(matching: element),
+                  let info = AXEngine.windowInfo(element) else { return }
+            if infos[id] != info {
+                infos[id] = info
+                publishState()
+            }
+        default: break
         }
-        if changed { controller.apply() }
-        if changed || titlesChanged { publishState() }
     }
 
     /// Env `TEMPO_MANAGE` (comma-separated) wins; otherwise `[daemon] managed = [...]`
@@ -365,6 +462,34 @@ func loadDaemonConfig() -> Config {
     } catch {
         FileHandle.standardError.write(Data("config: parse error in \(path): \(error)\n".utf8))
         return Config()
+    }
+}
+
+/// Shared box that lets the AX-observer worker thread publish its CFRunLoop pointer
+/// back to the main actor (which then attaches AX observer sources to that loop).
+final class AXThreadHandle: @unchecked Sendable {
+    var runLoop: CFRunLoop?
+    let ready = DispatchSemaphore(value: 0)
+    var noopSourceContext = CFRunLoopSourceContext()
+}
+
+/// `AXUIElement` is a CF class without a Sendable conformance — wrap it for the
+/// callback → main-queue hop. The wrapper retains via the captured property.
+struct SendableAXElement: @unchecked Sendable {
+    let element: AXUIElement
+}
+
+/// Top-level C-callback for AX observers — captures nothing, dispatches the notification
+/// onto the main queue where `handleAXNotification` lives.
+let axObserverCallback: AXObserverCallback = { _, element, notification, refcon in
+    guard let refcon else { return }
+    let delegate = Unmanaged<TempoAppDelegate>.fromOpaque(refcon).takeUnretainedValue()
+    let name = notification as String
+    let wrapped = SendableAXElement(element: element)
+    DispatchQueue.main.async {
+        MainActor.assumeIsolated {
+            delegate.handleAXNotification(name: name, element: wrapped.element)
+        }
     }
 }
 

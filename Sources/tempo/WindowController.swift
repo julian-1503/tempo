@@ -26,6 +26,13 @@ final class WindowController {
     var active: WorkspaceID { model.active }
     var knownIDs: Set<WindowID> { Set(elements.keys) }
 
+    /// Find the WindowID of a tracked element by AX equality. Used by the daemon's
+    /// destroyed/title-changed notifications, where only the raw AXUIElement is available.
+    func windowID(matching element: AXUIElement) -> WindowID? {
+        for (id, el) in elements where CFEqual(el, element) { return id }
+        return nil
+    }
+
     /// Snapshot every tracked window as `[PlacedWindow]`, joining the model's
     /// assignments with the caller's WindowInfo cache. Used to publish `state.json`.
     func placedWindows(using infos: [WindowID: WindowInfo]) -> [PlacedWindow] {
