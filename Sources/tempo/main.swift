@@ -98,8 +98,19 @@ case "scene":
 
 case "debug":
     guard AXIsProcessTrusted() else { fail("Accessibility permission required.", code: 5) }
-    guard args.count >= 3 else { fail("usage: tempo debug <winpos|move> <bundleId> [x y]") }
+    guard args.count >= 2 else { fail("usage: tempo debug <winpos|move|frames> ...") }
     let sub = args[1]
+    if sub == "frames" {
+        let area = AXEngine.mainDisplayArea()
+        print("display: \(Int(area.x)),\(Int(area.y)) \(Int(area.width))x\(Int(area.height))")
+        for (element, info) in AXEngine.allWindows() {
+            let p = AXEngine.position(element) ?? .zero
+            let s = AXEngine.size(element) ?? .zero
+            print("\(info.bundleId) [\(info.title)] @ \(Int(p.x)),\(Int(p.y)) \(Int(s.width))x\(Int(s.height))")
+        }
+        break
+    }
+    guard args.count >= 3 else { fail("usage: tempo debug <winpos|move> <bundleId> [x y]") }
     let bundleId = args[2]
     guard let window = AXEngine.firstWindow(bundleId: bundleId) else {
         fail("no window found for \(bundleId)", code: 4)
