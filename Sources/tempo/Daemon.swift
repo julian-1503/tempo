@@ -36,6 +36,7 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             guard let id = AXEngine.windowID(element) else { continue }
             infos[id] = info
             controller.adopt(id, element: element, workspace: workspace(for: info))
+            if shouldFloat(info) { controller.markFloating(id, true) }
         }
         controller.apply()
         publishState()
@@ -53,6 +54,20 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
               case let .route(target, _, _) = router.decide(for: info, scene: scene, activeWorkspace: controller.active)
         else { return controller.active }
         return target
+    }
+
+    /// Should this window auto-float? True for dialog/floating subroles, or when the
+    /// scene's matching assignment explicitly asks for `float: true`.
+    private func shouldFloat(_ info: WindowInfo) -> Bool {
+        switch info.subrole {
+        case .dialog, .floatingWindow: return true
+        default: break
+        }
+        guard let scene else { return false }
+        switch router.decide(for: info, scene: scene, activeWorkspace: controller.active) {
+        case .route(_, _, let float):    return float
+        case .showInCurrent(let float):  return float
+        }
     }
 
     /// Poll for window changes. New windows of managed apps are routed silently (the active
@@ -79,9 +94,11 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             guard !controller.knownIDs.contains(id) else { continue }
             let target = workspace(for: info)
             controller.adopt(id, element: element, workspace: target)
+            if shouldFloat(info) { controller.markFloating(id, true) }
             changed = true
+            let floatTag = shouldFloat(info) ? " (floating)" : ""
             log("new window \(info.bundleId) [\(info.title)] -> workspace \(target)" +
-                (target == controller.active ? "" : " (filed, focus kept)"))
+                (target == controller.active ? "" : " (filed, focus kept)") + floatTag)
         }
         for id in controller.knownIDs.subtracting(liveIDs) {
             controller.forget(id)

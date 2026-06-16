@@ -12,6 +12,7 @@ public struct WorkspaceModel {
     private var order: [WorkspaceID: [WindowID]] = [:]
     private var orientations: [WorkspaceID: Orientation] = [:]
     private var modes: [WorkspaceID: WorkspaceMode] = [:]
+    private var floats: Set<WindowID> = []
     private var previous: WorkspaceID?
 
     public init(active: WorkspaceID) {
@@ -34,6 +35,7 @@ public struct WorkspaceModel {
             order[prev]?.removeAll { $0 == window }
         }
         assignment[window] = nil
+        floats.remove(window)
     }
 
     /// Reassign `window` to `workspace`. Same insertion semantics as `add`.
@@ -83,6 +85,26 @@ public struct WorkspaceModel {
     /// Set the layout mode of `workspace`.
     public mutating func setMode(_ mode: WorkspaceMode, for workspace: WorkspaceID) {
         modes[workspace] = mode
+    }
+
+    /// Is `window` floating? Floats are excluded from tile layout and keep their own frame.
+    public func isFloating(_ window: WindowID) -> Bool {
+        floats.contains(window)
+    }
+
+    /// Mark `window` floating (or not). Cleared automatically when the window is removed.
+    public mutating func markFloating(_ window: WindowID, _ floating: Bool) {
+        if floating { floats.insert(window) } else { floats.remove(window) }
+    }
+
+    /// Tiled (non-floating) windows in `workspace`, in tile order.
+    public func tiledWindows(in workspace: WorkspaceID) -> [WindowID] {
+        (order[workspace] ?? []).filter { !floats.contains($0) }
+    }
+
+    /// Floating windows in `workspace`, in tile order.
+    public func floatingWindows(in workspace: WorkspaceID) -> [WindowID] {
+        (order[workspace] ?? []).filter { floats.contains($0) }
     }
 
     /// The previous/next tile of `window` within its workspace's order, or nil at the

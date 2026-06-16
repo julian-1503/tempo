@@ -200,6 +200,43 @@ struct WorkspaceModelTests {
         #expect(model.mode(of: "1") == .tiles)
     }
 
+    @Test("a newly added window is not floating by default")
+    func defaultNonFloating() {
+        var model = WorkspaceModel(active: "1")
+        model.add(10, to: "1")
+        #expect(model.isFloating(10) == false)
+    }
+
+    @Test("markFloating toggles the float flag for a window")
+    func toggleFloating() {
+        var model = WorkspaceModel(active: "1")
+        model.add(10, to: "1")
+        model.markFloating(10, true)
+        #expect(model.isFloating(10) == true)
+        model.markFloating(10, false)
+        #expect(model.isFloating(10) == false)
+    }
+
+    @Test("tiledWindows excludes floats; floatingWindows returns only floats; both preserve tile order")
+    func tiledVsFloating() {
+        var model = WorkspaceModel(active: "1")
+        model.add(10, to: "1")
+        model.add(20, to: "1")
+        model.add(30, to: "1")
+        model.markFloating(20, true)
+        #expect(model.tiledWindows(in: "1") == [10, 30])
+        #expect(model.floatingWindows(in: "1") == [20])
+    }
+
+    @Test("remove clears the float flag so a reused WindowID isn't accidentally still floating")
+    func removeClearsFloat() {
+        var model = WorkspaceModel(active: "1")
+        model.add(10, to: "1")
+        model.markFloating(10, true)
+        model.remove(10)
+        #expect(model.isFloating(10) == false)
+    }
+
     @Test("placedWindows joins assignments with the info cache, sorted by workspace then id")
     func placedWindowsJoin() {
         var model = WorkspaceModel(active: "1")

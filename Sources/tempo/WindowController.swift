@@ -11,6 +11,9 @@ final class WindowController {
     private let tiler = Tiler()
     private let area: Frame
     private let offScreen: CGPoint
+    /// Last on-screen (position, size) per floating window. Restored when its
+    /// workspace becomes active again.
+    private var floatFrames: [WindowID: (position: CGPoint, size: CGSize)] = [:]
 
     init(active: WorkspaceID, area: Frame) {
         self.model = WorkspaceModel(active: active)
@@ -96,24 +99,73 @@ final class WindowController {
         apply()
     }
 
-    /// Tile the active workspace's windows; push everything else off-screen.
+    /// Tile the active workspace's non-floating windows; push hidden ones off-screen;
+    /// keep floats wherever they were and restore from cache when they re-enter view.
     func apply() {
-        let visible = model.visibleWindows
         let active = model.active
+
+        // 1. Snapshot every on-screen float's current frame (user may have dragged it).
+        captureFloatFrames()
+
+        // 2. Tile the active workspace's non-floating windows.
+        let tiled = model.tiledWindows(in: active)
         let mode: TilingMode = switch model.mode(of: active) {
         case .tiles: .tiles(model.orientation(of: active))
         case .accordion: .accordion
         }
-        let frames = tiler.layout(count: visible.count, in: area, mode: mode)
-        for (id, frame) in zip(visible, frames) {
+        let frames = tiler.layout(count: tiled.count, in: area, mode: mode)
+        for (id, frame) in zip(tiled, frames) {
             guard let element = elements[id] else { continue }
             AXEngine.setSize(element, CGSize(width: frame.width, height: frame.height))
             AXEngine.setPosition(element, CGPoint(x: frame.x, y: frame.y))
             AXEngine.setSize(element, CGSize(width: frame.width, height: frame.height))
         }
+
+        // 3. Push everything in hidden workspaces (tiles + floats) off-screen.
         for id in model.hiddenWindows {
             guard let element = elements[id] else { continue }
             AXEngine.setPosition(element, offScreen)
         }
+
+        // 4. Restore each active float to its cached frame; capture the initial
+        // frame if we don't have one yet; center it as a last resort when the
+        // window is currently off-screen with no cache (e.g. daemon restart).
+        for id in model.floatingWindows(in: active) {
+            guard let element = elements[id] else { continue }
+            if let cached = floatFrames[id], !isOffScreen(cached.position) {
+                AXEngine.setSize(element, cached.size)
+                AXEngine.setPosition(element, cached.position)
+            } else if let p = AXEngine.position(element), let s = AXEngine.size(element),
+                      !isOffScreen(p) {
+                floatFrames[id] = (position: p, size: s)
+            } else if let s = AXEngine.size(element) {
+                let centered = CGPoint(
+                    x: area.x + (area.width  - s.width)  / 2,
+                    y: area.y + (area.height - s.height) / 2)
+                AXEngine.setPosition(element, centered)
+                floatFrames[id] = (position: centered, size: s)
+            }
+        }
+    }
+
+    func markFloating(_ id: WindowID, _ floating: Bool) {
+        guard elements[id] != nil else { return }
+        model.markFloating(id, floating)
+    }
+
+    private func captureFloatFrames() {
+        for (id, element) in elements where model.isFloating(id) {
+            guard let p = AXEngine.position(element), let s = AXEngine.size(element) else { continue }
+            if !isOffScreen(p) {
+                floatFrames[id] = (position: p, size: s)
+            }
+        }
+    }
+
+    /// True when the window sits in the off-screen corner — only `x` is checked, since
+    /// macOS clamps the bottom edge and a hidden window's y may be tens of pixels above
+    /// `offScreen.y`. The x edge holds firm at `area.x + area.width - 1`.
+    private func isOffScreen(_ p: CGPoint) -> Bool {
+        p.x >= area.x + area.width - 5
     }
 }
