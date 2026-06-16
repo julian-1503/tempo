@@ -215,6 +215,12 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 log("hotkey -> fullscreen (no managed focused window in active workspace)")
             }
+        case .toggleFloating:
+            if let action = controller.toggleFloating() {
+                log("hotkey -> float \(action)")
+            } else {
+                log("hotkey -> float (no managed focused window in active workspace)")
+            }
         }
     }
 

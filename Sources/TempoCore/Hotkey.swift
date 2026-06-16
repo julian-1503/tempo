@@ -29,6 +29,8 @@ public enum Hotkey: Equatable, Sendable {
     case toggleAccordion
     /// Toggle fullscreen for the focused window in the active workspace.
     case toggleFullscreen
+    /// Toggle the floating flag for the focused window in the active workspace.
+    case toggleFloating
 }
 
 /// Pure mapping from (keyCode, modifiers) to a `Hotkey`. v1 binding scheme:
@@ -48,6 +50,9 @@ public enum HotkeyDecoder {
         if keyCode == kComma {
             return modifiers.contains(.shift) ? nil : .toggleAccordion
         }
+        if keyCode == kSpace {
+            return modifiers.contains(.shift) ? nil : .toggleFloating
+        }
         if let direction = tileDirections[keyCode] {
             return modifiers.contains(.shift) ? .moveTile(direction)
                                               : .focusTile(direction)
@@ -66,6 +71,7 @@ public enum HotkeyDecoder {
     private static let kSlash: UInt16 = 44
     private static let kComma: UInt16 = 43
     private static let kF: UInt16 = 3
+    private static let kSpace: UInt16 = 49
 
     /// Vim-style HJKL → tile direction. H/J/K/L are intentionally omitted from
     /// `labels` so they reach this map first.

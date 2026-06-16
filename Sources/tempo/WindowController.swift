@@ -80,6 +80,24 @@ final class WindowController {
         return true
     }
 
+    /// Toggle floating for the focused window (must be in the active workspace).
+    /// Returns the new state as a label on success, nil on no-op. Clears any active-
+    /// workspace fullscreen first, otherwise the fullscreen short-circuit in apply()
+    /// would hide the float result.
+    func toggleFloating() -> String? {
+        let active = model.active
+        guard let focused = AXEngine.focusedWindowID(),
+              model.workspace(of: focused) == active,
+              elements[focused] != nil else { return nil }
+        if model.fullscreen(in: active) != nil {
+            model.clearFullscreen(in: active)
+        }
+        let newState = !model.isFloating(focused)
+        model.markFloating(focused, newState)
+        apply()
+        return newState ? "set on \(focused)" : "cleared on \(focused)"
+    }
+
     /// Toggle fullscreen for the focused window (must be in the active workspace).
     /// Returns the new state as a label ("set" / "cleared") on success, nil on no-op.
     func toggleFullscreen() -> String? {

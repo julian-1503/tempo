@@ -123,4 +123,16 @@ struct HotkeyTests {
     func altFSwitchWorkspace() {
         #expect(HotkeyDecoder.decode(keyCode: kF, modifiers: .option) == .switchWorkspace("F"))
     }
+
+    let kSpace: UInt16 = 49
+
+    @Test("alt+space decodes to toggleFloating")
+    func altSpaceFloats() {
+        #expect(HotkeyDecoder.decode(keyCode: kSpace, modifiers: .option) == .toggleFloating)
+    }
+
+    @Test("alt+shift+space returns nil (single-press chord only)")
+    func altShiftSpaceUnbound() {
+        #expect(HotkeyDecoder.decode(keyCode: kSpace, modifiers: [.option, .shift]) == nil)
+    }
 }
