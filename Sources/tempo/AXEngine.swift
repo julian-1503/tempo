@@ -2,6 +2,11 @@ import AppKit
 import ApplicationServices
 import TempoCore
 
+// Private API used by tiling WMs to get a stable window id for an AX window.
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement,
+                                   _ identifier: UnsafeMutablePointer<CGWindowID>) -> AXError
+
 /// Low-level Accessibility window operations. The verified primitives the workspace
 /// engine will build on. (Dev-facing for now, exercised via `tempo debug`.)
 enum AXEngine {
@@ -60,6 +65,27 @@ enum AXEngine {
         var value = point
         guard let axValue = AXValueCreate(.cgPoint, &value) else { return false }
         return AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, axValue) == .success
+    }
+
+    @discardableResult
+    static func setSize(_ window: AXUIElement, _ size: CGSize) -> Bool {
+        var value = size
+        guard let axValue = AXValueCreate(.cgSize, &value) else { return false }
+        return AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, axValue) == .success
+    }
+
+    /// Stable window id for an AX window (CGWindowID), or nil.
+    static func windowID(_ window: AXUIElement) -> TempoCore.WindowID? {
+        var id: CGWindowID = 0
+        guard _AXUIElementGetWindow(window, &id) == .success, id != 0 else { return nil }
+        return TempoCore.WindowID(id)
+    }
+
+    /// The full bounds of the main display, in the top-left global coordinates AX uses.
+    static func mainDisplayArea() -> Frame {
+        let bounds = CGDisplayBounds(CGMainDisplayID())
+        return Frame(x: bounds.origin.x, y: bounds.origin.y,
+                     width: bounds.size.width, height: bounds.size.height)
     }
 
     private static func axValue<T>(_ element: AXUIElement,

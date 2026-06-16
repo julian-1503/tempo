@@ -103,7 +103,10 @@ case "debug":
         print("\(Int(p.x)) \(Int(p.y)) \(Int(s.width)) \(Int(s.height))")
     case "move":
         guard args.count >= 5, let x = Double(args[3]), let y = Double(args[4]) else {
-            fail("usage: tempo debug move <bundleId> <x> <y>", code: 2)
+            fail("usage: tempo debug move <bundleId> <x> <y> [w h]", code: 2)
+        }
+        if args.count >= 7, let w = Double(args[5]), let h = Double(args[6]) {
+            AXEngine.setSize(window, CGSize(width: w, height: h))
         }
         let ok = AXEngine.setPosition(window, CGPoint(x: x, y: y))
         let p = AXEngine.position(window) ?? .zero
@@ -111,6 +114,16 @@ case "debug":
     default:
         fail("unknown debug command: \(sub)")
     }
+
+case "daemon":
+    runDaemon()
+
+case "workspace":
+    guard args.count >= 2 else { fail("usage: tempo workspace <id>") }
+    if !sendDaemonCommand("workspace \(args[1])") { fail("tempo daemon is not running", code: 6) }
+
+case "back":
+    if !sendDaemonCommand("back") { fail("tempo daemon is not running", code: 6) }
 
 case "help", "--help", nil:
     print(helpText)

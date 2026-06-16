@@ -1,0 +1,136 @@
+import AppKit
+import ApplicationServices
+import TempoCore
+
+/// The long-running Tempo daemon: adopts managed windows into workspaces, applies the
+/// active workspace's tiling, shows a menu bar item, and takes commands over a FIFO.
+@MainActor
+final class TempoAppDelegate: NSObject, NSApplicationDelegate {
+    private var controller: WindowController!
+    private var statusItem: NSStatusItem!
+    private var fifoSource: DispatchSourceRead?
+    private var fifoFD: Int32 = -1
+    private let fifoPath: String
+
+    init(fifoPath: String) { self.fifoPath = fifoPath }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard AXIsProcessTrusted() else {
+            log("Accessibility permission required.")
+            NSApp.terminate(nil)
+            return
+        }
+
+        let scene = loadStartupScene()
+        let active = scene?.focusWorkspace ?? "1"
+        controller = WindowController(active: active, area: AXEngine.mainDisplayArea())
+
+        let router = Router()
+        for (element, info) in AXEngine.allWindows() where isManaged(info.bundleId) {
+            guard let id = AXEngine.windowID(element) else { continue }
+            var workspace = active
+            if let scene, case let .route(target, _, _) = router.decide(for: info, scene: scene, activeWorkspace: active) {
+                workspace = target
+            }
+            controller.adopt(id, element: element, workspace: workspace)
+        }
+        controller.apply()
+
+        setupMenuBar()
+        setupFIFO()
+        log("tempo daemon started — active workspace \(controller.active), fifo \(fifoPath)")
+    }
+
+    private func isManaged(_ bundleId: String) -> Bool {
+        guard let list = ProcessInfo.processInfo.environment["TEMPO_MANAGE"], !list.isEmpty else { return true }
+        return list.split(separator: ",").map(String.init).contains(bundleId)
+    }
+
+    private func loadStartupScene() -> Scene? {
+        guard let name = ProcessInfo.processInfo.environment["TEMPO_SCENE"] else { return nil }
+        return try? FileSceneStore(directory: scenesDirectory()).load(name)
+    }
+
+    private func setupMenuBar() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        updateMenuBar()
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: "Quit Tempo", action: #selector(quit), keyEquivalent: "q"))
+        statusItem.menu = menu
+    }
+
+    private func updateMenuBar() {
+        statusItem.button?.title = "T:\(controller.active)"
+    }
+
+    @objc private func quit() { NSApp.terminate(nil) }
+
+    private func setupFIFO() {
+        unlink(fifoPath)
+        guard mkfifo(fifoPath, 0o600) == 0 else { log("mkfifo failed"); return }
+        fifoFD = open(fifoPath, O_RDWR | O_NONBLOCK)
+        guard fifoFD >= 0 else { log("fifo open failed"); return }
+        let source = DispatchSource.makeReadSource(fileDescriptor: fifoFD, queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.readCommands() }
+        }
+        source.resume()
+        fifoSource = source
+    }
+
+    private func readCommands() {
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        let count = read(fifoFD, &buffer, buffer.count)
+        guard count > 0 else { return }
+        let text = String(decoding: buffer[0..<count], as: UTF8.self)
+        for line in text.split(separator: "\n") { handle(String(line)) }
+    }
+
+    private func handle(_ command: String) {
+        let parts = command.split(separator: " ").map(String.init)
+        switch parts.first {
+        case "workspace" where parts.count >= 2:
+            controller.switchTo(parts[1]); updateMenuBar(); log("-> workspace \(parts[1])")
+        case "back":
+            controller.backAndForth(); updateMenuBar(); log("-> back")
+        case "quit":
+            quit()
+        default:
+            log("unknown command: \(command)")
+        }
+    }
+
+    private func log(_ message: String) {
+        FileHandle.standardError.write(Data((message + "\n").utf8))
+    }
+}
+
+@MainActor
+func runDaemon() {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    let delegate = TempoAppDelegate(fifoPath: daemonFIFOPath())
+    app.delegate = delegate
+    app.run()
+    _ = delegate // keep alive for the run loop (NSApplication.delegate is weak)
+}
+
+func daemonBaseDirectory() -> String {
+    let base = ProcessInfo.processInfo.environment["TEMPO_HOME"]
+        ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/tempo").path
+    try? FileManager.default.createDirectory(atPath: base, withIntermediateDirectories: true)
+    return base
+}
+
+func daemonFIFOPath() -> String {
+    daemonBaseDirectory() + "/tempo.cmd"
+}
+
+@discardableResult
+func sendDaemonCommand(_ command: String) -> Bool {
+    let fd = open(daemonFIFOPath(), O_WRONLY | O_NONBLOCK)
+    guard fd >= 0 else { return false }
+    defer { close(fd) }
+    let bytes = Array((command + "\n").utf8)
+    return write(fd, bytes, bytes.count) == bytes.count
+}
