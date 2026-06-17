@@ -46,6 +46,7 @@ final class WindowController {
 
     func forget(_ id: WindowID) {
         elements[id] = nil
+        floatFrames[id] = nil
         model.remove(id)
     }
 
