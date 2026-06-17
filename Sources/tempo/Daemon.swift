@@ -25,9 +25,10 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     private var workspaceActivateObserver: NSObjectProtocol?
     private var paused = false
     /// Parsed `[scenes]` chord → scene bindings from `tempo.toml`. Read by the
-    /// nonisolated event-tap callback; `let` + immutable contents + Sendable
-    /// element types make that safe without locks.
-    nonisolated let sceneBindings: [(chord: ChordBinding, scene: String)]
+    /// nonisolated event-tap callback via `matchSceneBinding` — a Sendable struct
+    /// (vs a labeled tuple) keeps Swift 6's runtime isolation check off the
+    /// non-main thread.
+    nonisolated let sceneBindings: [SceneBinding]
 
     init(fifoPath: String) {
         self.fifoPath = fifoPath
@@ -36,19 +37,27 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
 
     /// Translate the TOML `[scenes]` map (name → chord string) into a parsed
     /// list. Bad chord strings are dropped with a stderr warning.
-    nonisolated private static func parseSceneBindings(
-        _ raw: [String: String]
-    ) -> [(chord: ChordBinding, scene: String)] {
-        var result: [(ChordBinding, String)] = []
+    nonisolated private static func parseSceneBindings(_ raw: [String: String]) -> [SceneBinding] {
+        var result: [SceneBinding] = []
         for (sceneName, chordStr) in raw {
             if let parsed = parseChord(chordStr) {
-                result.append((parsed, sceneName))
+                result.append(SceneBinding(chord: parsed, scene: sceneName))
             } else {
                 FileHandle.standardError.write(Data(
                     "config: ignoring invalid chord for scene '\(sceneName)': \(chordStr)\n".utf8))
             }
         }
         return result
+    }
+
+    /// Lookup helper called from the event-tap thread — `nonisolated` keeps the
+    /// Swift 6 runtime isolation check off the path.
+    nonisolated func matchSceneBinding(keyCode: UInt16, modifiers: Modifiers) -> String? {
+        for binding in sceneBindings
+            where binding.chord.keyCode == keyCode && binding.chord.modifiers == modifiers {
+            return binding.scene
+        }
+        return nil
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -590,9 +599,7 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
                 let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
                 let mods = TempoAppDelegate.modifiers(from: event.flags)
                 // User-defined scene bindings win over the built-in chord map.
-                if let scene = delegate.sceneBindings.first(where: {
-                    $0.chord.keyCode == keyCode && $0.chord.modifiers == mods
-                })?.scene {
+                if let scene = delegate.matchSceneBinding(keyCode: keyCode, modifiers: mods) {
                     DispatchQueue.main.async {
                         MainActor.assumeIsolated { delegate.handle(hotkey: .applyScene(scene)) }
                     }
@@ -703,6 +710,13 @@ final class AXThreadHandle: @unchecked Sendable {
     var runLoop: CFRunLoop?
     let ready = DispatchSemaphore(value: 0)
     var noopSourceContext = CFRunLoopSourceContext()
+}
+
+/// Parsed `[scenes]` binding. Plain Sendable struct (vs a labeled tuple) so the
+/// event-tap thread can iterate without tripping Swift 6 isolation checks.
+struct SceneBinding: Sendable {
+    let chord: ChordBinding
+    let scene: String
 }
 
 /// `AXUIElement` is a CF class without a Sendable conformance — wrap it for the
