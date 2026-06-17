@@ -183,7 +183,7 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     /// from our own `controller.switchTo` → `AXEngine.focus` → activate chain.
     private var inAppActivatedHandler = false
     fileprivate func handleAppActivated(_ app: NSRunningApplication) {
-        if inAppActivatedHandler { return }
+        if inAppActivatedHandler || inSceneApply { return }
         inAppActivatedHandler = true
         defer { inAppActivatedHandler = false }
 
@@ -534,19 +534,26 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Switch the active Scene at runtime: forget every tracked window, unhide every
-    /// regular app, then re-enumerate so each app gets adopted/hidden per the new
-    /// scene's assignments. Cleaner than computing per-window diffs, and the
-    /// hideUnassigned guard in `adoptWindow` automatically does the right thing for
-    /// apps the new scene doesn't mention.
+    /// Switch the active Scene at runtime. Forget every tracked window, then in
+    /// one pass: unhide only the apps the new scene actually assigns (so previously
+    /// app-hidden apps reappear), and re-enumerate each running app's windows.
+    /// `adoptWindow`'s hideUnassigned guard re-hides any app the new scene doesn't
+    /// want. Re-entrancy flag suppresses AX notification follow-up that the
+    /// re-adopt churn would otherwise trigger and amplify into visible flicker.
+    private var inSceneApply = false
     fileprivate func applyScene(named name: String, source: String) {
         do {
             let store = FileSceneStore(directory: scenesDirectory())
             let loaded = try store.load(name)
+            inSceneApply = true
+            defer { inSceneApply = false }
             scene = loaded
             for id in Array(controller.knownIDs) { controller.forget(id) }
+            let assigned = Set(loaded.assignments.compactMap(\.match.bundleId))
             for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
-                app.unhide()
+                if let bid = app.bundleIdentifier, assigned.contains(bid), app.isHidden {
+                    app.unhide()
+                }
                 enumerateExistingWindows(of: app, applyAndPublish: false)
             }
             if let focus = loaded.focusWorkspace {
