@@ -351,6 +351,19 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Late-adopt the currently focused AX window if we've lost track of it.
+    /// Chrome (and other apps with heavy startup churn) can emit spurious
+    /// `kAXUIElementDestroyedNotification` for windows that stay visible — we
+    /// `forget()` them, then the user's next chord fails with "no managed
+    /// focused window". This re-anchors the visible window so move/focus chords
+    /// keep working without forcing the user to alt-tab to refresh tracking.
+    private func ensureFocusedTracked() {
+        guard let window = AXEngine.focusedWindow(),
+              let id = AXEngine.windowID(window),
+              !controller.knownIDs.contains(id) else { return }
+        adoptWindow(window, applyAndPublish: false)
+    }
+
     fileprivate func handle(hotkey: Hotkey) {
         if case .togglePaused = hotkey {
             togglePaused()
@@ -368,6 +381,7 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             controller.backAndForth(); updateMenuBar()
             log("hotkey -> back")
         case .moveFocusedWindow(let target):
+            ensureFocusedTracked()
             guard let focusedID = AXEngine.focusedWindowID(),
                   controller.knownIDs.contains(focusedID) else {
                 log("hotkey -> move focused to \(target) (no managed focused window)")
@@ -376,12 +390,14 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             controller.moveWindow(focusedID, to: target)
             log("hotkey -> move focused (\(focusedID)) to \(target)")
         case .focusTile(let direction):
+            ensureFocusedTracked()
             if controller.focusTile(direction) {
                 log("hotkey -> focus tile \(direction)")
             } else {
                 log("hotkey -> focus tile \(direction) (no-op)")
             }
         case .moveTile(let direction):
+            ensureFocusedTracked()
             if controller.moveTile(direction) {
                 log("hotkey -> move tile \(direction)")
             } else {
@@ -400,12 +416,14 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             controller.setMode(after, for: active)
             log("hotkey -> toggle accordion (\(active): \(before) -> \(after))")
         case .toggleFullscreen:
+            ensureFocusedTracked()
             if let action = controller.toggleFullscreen() {
                 log("hotkey -> fullscreen \(action)")
             } else {
                 log("hotkey -> fullscreen (no managed focused window in active workspace)")
             }
         case .toggleFloating:
+            ensureFocusedTracked()
             if let action = controller.toggleFloating() {
                 log("hotkey -> float \(action)")
             } else {
