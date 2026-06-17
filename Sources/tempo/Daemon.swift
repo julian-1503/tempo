@@ -433,72 +433,33 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         log("event tap re-enabled")
     }
 
-    /// Map CGEventFlags to Tempo's pure `Modifiers` set.
+    /// Install a session event tap on a dedicated thread. NSApp's main run loop
+    /// does not service manually-added CFRunLoop sources from a CLI-launched
+    /// process, so we own the thread. Returning `nil` from the callback consumes
+    /// the event so apps never see Tempo's hotkeys.
     ///
-    /// `nonisolated` is critical — the C-convention CGEventTap callback runs on
-    /// the dedicated `tempo.event-tap` thread, and Swift 6's runtime asserts
-    /// MainActor isolation on every static method of an @MainActor class
-    /// unless explicitly opted out, which crashes the daemon with
-    /// `dispatch_assert_queue_fail`.
-    nonisolated fileprivate static func modifiers(from flags: CGEventFlags) -> Modifiers {
-        var mods: Modifiers = []
-        if flags.contains(.maskAlternate)   { mods.insert(.option) }
-        if flags.contains(.maskShift)       { mods.insert(.shift) }
-        if flags.contains(.maskCommand)     { mods.insert(.command) }
-        if flags.contains(.maskControl)     { mods.insert(.control) }
-        return mods
-    }
-
-    /// Install a session event tap on a dedicated thread (NSApp's main run loop does not
-    /// service manually-added CFRunLoop sources from a CLI-launched process). Returning
-    /// `nil` from the callback consumes the event so apps never see Tempo's hotkeys.
+    /// The callback and thread closures live at file scope (see `tempoEventTapCallback`
+    /// and `runEventTapLoop`) so Swift 6 does NOT infer them as `@MainActor` from
+    /// the enclosing class. Inline closures inside a `@MainActor` method are
+    /// auto-promoted and the runtime then asserts isolation when the event-tap
+    /// thread dispatches the callback — crashing with `dispatch_assert_queue_fail`.
     private func startEventTap() {
         let mask: CGEventMask = 1 << CGEventType.keyDown.rawValue
         let refcon = Unmanaged.passUnretained(self).toOpaque()
-        let callback: CGEventTapCallBack = { _, type, event, refcon in
-            switch type {
-            case .tapDisabledByTimeout, .tapDisabledByUserInput:
-                if let refcon {
-                    let delegate = Unmanaged<TempoAppDelegate>.fromOpaque(refcon).takeUnretainedValue()
-                    DispatchQueue.main.async {
-                        MainActor.assumeIsolated { delegate.reenableEventTap() }
-                    }
-                }
-                return Unmanaged.passUnretained(event)
-            case .keyDown:
-                guard let refcon else { return Unmanaged.passUnretained(event) }
-                let delegate = Unmanaged<TempoAppDelegate>.fromOpaque(refcon).takeUnretainedValue()
-                let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-                let mods = TempoAppDelegate.modifiers(from: event.flags)
-                if let hotkey = HotkeyDecoder.decode(keyCode: keyCode, modifiers: mods) {
-                    DispatchQueue.main.async {
-                        MainActor.assumeIsolated { delegate.handle(hotkey: hotkey) }
-                    }
-                    return nil
-                }
-                return Unmanaged.passUnretained(event)
-            default:
-                return Unmanaged.passUnretained(event)
-            }
-        }
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
             options: .defaultTap,
             eventsOfInterest: mask,
-            callback: callback,
+            callback: tempoEventTapCallback,
             userInfo: refcon
         ) else {
             log("CGEvent.tapCreate failed — accessibility permission may be insufficient")
             return
         }
         eventTap = tap
-        let thread = Thread {
-            let source = CFMachPortCreateRunLoopSource(nil, tap, 0)
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
-            CGEvent.tapEnable(tap: tap, enable: true)
-            CFRunLoopRun()
-        }
+        let box = EventTapBox(port: tap)
+        let thread = Thread { runEventTapLoop(box) }
         thread.name = "tempo.event-tap"
         thread.start()
         eventTapThread = thread
@@ -574,6 +535,77 @@ let axObserverCallback: AXObserverCallback = { _, element, notification, refcon 
             delegate.handleAXNotification(name: name, element: wrapped.element)
         }
     }
+}
+
+/// Map CGEventFlags to Tempo's pure `Modifiers` set. Free function (not a
+/// method on `TempoAppDelegate`) so the CGEventTap callback running on the
+/// `tempo.event-tap` thread can call it without the Swift 6 runtime asserting
+/// MainActor isolation on a static method of an `@MainActor` class.
+func modifiersFrom(_ flags: CGEventFlags) -> Modifiers {
+    var mods: Modifiers = []
+    if flags.contains(.maskAlternate)   { mods.insert(.option) }
+    if flags.contains(.maskShift)       { mods.insert(.shift) }
+    if flags.contains(.maskCommand)     { mods.insert(.command) }
+    if flags.contains(.maskControl)     { mods.insert(.control) }
+    return mods
+}
+
+/// Sendable wrapper around the `UnsafeMutableRawPointer` we use as the event
+/// tap's `userInfo`. The raw pointer is opaque (it's just a back-pointer to
+/// the `TempoAppDelegate`); the wrapper exists only to satisfy Swift 6's
+/// sending-across-isolation check on `DispatchQueue.main.async`.
+struct RefconBox: @unchecked Sendable {
+    let raw: UnsafeMutableRawPointer
+}
+
+/// CGEventTap C-callback. Lives at file scope so Swift 6 does not infer it
+/// as `@MainActor` from an enclosing class — defining the same body inside
+/// `startEventTap()` (a `@MainActor` method) auto-promotes the closure and
+/// triggers `dispatch_assert_queue_fail` on the event-tap thread.
+let tempoEventTapCallback: CGEventTapCallBack = { _, type, event, refcon in
+    switch type {
+    case .tapDisabledByTimeout, .tapDisabledByUserInput:
+        guard let raw = refcon else { return Unmanaged.passUnretained(event) }
+        let box = RefconBox(raw: raw)
+        DispatchQueue.main.async {
+            let delegate = Unmanaged<TempoAppDelegate>.fromOpaque(box.raw).takeUnretainedValue()
+            MainActor.assumeIsolated { delegate.reenableEventTap() }
+        }
+        return Unmanaged.passUnretained(event)
+    case .keyDown:
+        guard let raw = refcon else { return Unmanaged.passUnretained(event) }
+        let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+        let mods = modifiersFrom(event.flags)
+        if let hotkey = HotkeyDecoder.decode(keyCode: keyCode, modifiers: mods) {
+            let box = RefconBox(raw: raw)
+            DispatchQueue.main.async {
+                let delegate = Unmanaged<TempoAppDelegate>.fromOpaque(box.raw).takeUnretainedValue()
+                MainActor.assumeIsolated { delegate.handle(hotkey: hotkey) }
+            }
+            return nil
+        }
+        return Unmanaged.passUnretained(event)
+    default:
+        return Unmanaged.passUnretained(event)
+    }
+}
+
+/// Sendable wrapper around `CFMachPort` — `CFMachPort` lacks a `Sendable`
+/// conformance, so capturing it in the thread closure (also at file scope)
+/// requires an `@unchecked Sendable` shim.
+struct EventTapBox: @unchecked Sendable {
+    let port: CFMachPort
+}
+
+/// Body of the event-tap thread. File scope (same reason as the callback) —
+/// inlining inside the `@MainActor` `startEventTap()` auto-promotes the
+/// thread closure, which then crashes the runtime when CFRunLoopRun dispatches
+/// the callback off the event-tap thread.
+func runEventTapLoop(_ box: EventTapBox) {
+    let source = CFMachPortCreateRunLoopSource(nil, box.port, 0)
+    CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+    CGEvent.tapEnable(tap: box.port, enable: true)
+    CFRunLoopRun()
 }
 
 @discardableResult
