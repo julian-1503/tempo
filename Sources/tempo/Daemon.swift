@@ -22,6 +22,7 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     private var appObservers: [pid_t: AXObserver] = [:]
     private var workspaceLaunchObserver: NSObjectProtocol?
     private var workspaceTermObserver: NSObjectProtocol?
+    private var workspaceActivateObserver: NSObjectProtocol?
     private var paused = false
 
     init(fifoPath: String) { self.fifoPath = fifoPath }
@@ -125,6 +126,35 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             else { return }
             MainActor.assumeIsolated { self?.appObservers[app.processIdentifier] = nil }
         }
+        // Cmd+Tab / Spotlight / dock click → app becomes frontmost. macOS posts a
+        // didActivateApplicationNotification reliably for cross-app focus changes
+        // (the per-app AXObserver focus-changed notification is unreliable here).
+        workspaceActivateObserver = nc.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil, queue: .main
+        ) { [weak self] note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            else { return }
+            MainActor.assumeIsolated { self?.handleAppActivated(app) }
+        }
+    }
+
+    /// Cross-app focus follow: when `app` becomes frontmost (Cmd+Tab, Spotlight),
+    /// look up its focused window's workspace and switch if different. No-op when
+    /// the focused window isn't tracked or its workspace is already active.
+    fileprivate func handleAppActivated(_ app: NSRunningApplication) {
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        var winRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &winRef) == .success,
+              let winRef else { return }
+        let window = winRef as! AXUIElement
+        guard let id = controller.windowID(matching: window),
+              let target = controller.workspace(of: id),
+              target != controller.active else { return }
+        controller.switchTo(target, focusing: id)
+        updateMenuBar()
+        publishState()
+        log("focus follow (app activated \(app.bundleIdentifier ?? "?")) -> workspace \(target)")
     }
 
     private func addAppObserver(for app: NSRunningApplication) {
