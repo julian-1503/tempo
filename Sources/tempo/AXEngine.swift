@@ -116,13 +116,26 @@ enum AXEngine {
         return windowID(win)
     }
 
-    /// Bring `window`'s owning app forward and ask AX to make this its main/focused window.
+    /// Bring `window`'s owning app forward and ask AX to make this its main/focused
+    /// window. Also re-centers the mouse cursor on the focused window — matches
+    /// AeroSpace's `on-focus-changed = "move-mouse window-lazy-center"` ergonomics so
+    /// any subsequent click lands inside the just-focused tile.
     static func focus(_ window: AXUIElement) {
         AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
         AXUIElementSetAttributeValue(window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
         var pid: pid_t = 0
         guard AXUIElementGetPid(window, &pid) == .success else { return }
         NSRunningApplication(processIdentifier: pid)?.activate()
+        centerCursor(on: window)
+    }
+
+    /// Warp the mouse cursor to the center of `window` and re-associate so subsequent
+    /// mouse events land where the cursor is. No-op if AX can't report the frame.
+    static func centerCursor(on window: AXUIElement) {
+        guard let origin = position(window), let size = size(window) else { return }
+        let center = CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
+        CGWarpMouseCursorPosition(center)
+        CGAssociateMouseAndMouseCursorPosition(1)
     }
 
     /// The full bounds of the main display, in the top-left global coordinates AX uses.
