@@ -346,6 +346,8 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             controller.switchTo(parts[1]); updateMenuBar(); log("-> workspace \(parts[1])")
         case "back":
             controller.backAndForth(); updateMenuBar(); log("-> back")
+        case "dump":
+            log("=== dump ===\n\(controller.debugDump())\n=== end dump ===")
         default:
             log("unknown command: \(command)")
         }

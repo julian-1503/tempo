@@ -155,10 +155,12 @@ final class WindowController {
         if model.fullscreen(in: active) == focused {
             model.clearFullscreen(in: active)
             apply()
+            if let element = tracked[focused]?.element { AXEngine.focus(element) }
             return "cleared"
         }
         model.setFullscreen(focused, in: active)
         apply()
+        if let element = tracked[focused]?.element { AXEngine.focus(element) }
         return "set on \(focused)"
     }
 
@@ -193,17 +195,30 @@ final class WindowController {
     /// Fullscreen takes precedence: when set, only the fullscreen window is visible at the
     /// full workspace area; everything else (tiles, floats, other workspaces) is hidden.
     func apply() {
+        // 0. Reconcile: drop tracked windows that have closed. macOS'
+        // kAXUIElementDestroyedNotification is unreliable (some apps — e.g.
+        // Karabiner's Settings window — never fire a usable one), so a closed
+        // window can linger in the model and inflate the tile count, leaving a
+        // phantom split with no window in it. Validate each element via
+        // _AXUIElementGetWindow (AXEngine.windowID): a destroyed window returns
+        // nil, a merely-hidden/off-screen one still resolves. Same principle as
+        // AeroSpace's refresh: reconcile, don't trust the destroy notification.
+        pruneClosedWindows()
+
         let active = model.active
 
         // 1. Snapshot every on-screen float's current frame (user may have dragged it).
         captureFloatFrames()
 
         // 2a. Fullscreen short-circuit: one window owns the whole area, everything else hides.
+        // Note: focus is NOT set here — apply() only lays out. Stealing focus (and
+        // warping the cursor) on every apply() fought the user's mouse whenever a
+        // background event re-ran layout. Focus is set explicitly by the actions
+        // that should move it (switchTo, toggleFullscreen, focusTile).
         if let fs = model.fullscreen(in: active), let fsElement = tracked[fs]?.element {
             AXEngine.setFrame(fsElement,
                               position: CGPoint(x: area.x, y: area.y),
                               size: CGSize(width: area.width, height: area.height))
-            AXEngine.focus(fsElement)
             for (id, record) in tracked where id != fs {
                 AXEngine.setPosition(record.element, offScreen)
             }
@@ -277,13 +292,47 @@ final class WindowController {
 
     /// Focus the first window of the new active workspace so subsequent move-focused /
     /// focus-tile hotkeys have a managed target. AeroSpace does the same on switch.
-    /// Skipped when the workspace has a fullscreen tile — `apply()` already focused it.
+    /// If the workspace has a fullscreen tile, that window takes focus.
     private func focusFirstTracked() {
         let active = model.active
-        if model.fullscreen(in: active) != nil { return }
+        if let fs = model.fullscreen(in: active), let element = tracked[fs]?.element {
+            AXEngine.focus(element)
+            return
+        }
         let order = model.tiledWindows(in: active) + model.floatingWindows(in: active)
         guard let id = order.first, let element = tracked[id]?.element else { return }
         AXEngine.focus(element)
+    }
+
+    /// Drop tracked windows whose AX element no longer resolves to a live window.
+    /// Returns the pruned ids (for logging). Safe to call before every layout.
+    @discardableResult
+    func pruneClosedWindows() -> [WindowID] {
+        let dead = tracked.keys.filter { AXEngine.windowID(tracked[$0]!.element) == nil }
+        for id in dead {
+            tracked[id] = nil
+            model.remove(id)
+        }
+        if !dead.isEmpty {
+            FileHandle.standardError.write(Data("reconcile -> pruned closed window(s) \(dead.sorted())\n".utf8))
+        }
+        return dead
+    }
+
+    /// Human-readable snapshot of tracked windows for the `dump` command.
+    func debugDump() -> String {
+        var lines = ["active=\(model.active) fullscreen=\(model.fullscreen(in: model.active).map(String.init) ?? "none")"]
+        let byWorkspace = Dictionary(grouping: tracked.keys) { model.workspace(of: $0) ?? "?" }
+        for ws in byWorkspace.keys.sorted() {
+            let tiles = model.tiledWindows(in: ws)
+            lines.append("ws \(ws): \(tiles.count) tiled, \(model.floatingWindows(in: ws).count) float")
+            for id in (byWorkspace[ws] ?? []).sorted() {
+                let rec = tracked[id]
+                let alive = AXEngine.windowID(rec!.element) != nil
+                lines.append("  id=\(id) \(rec?.info.bundleId ?? "?") float=\(model.isFloating(id)) alive=\(alive) [\(rec?.info.title ?? "")]")
+            }
+        }
+        return lines.joined(separator: "\n")
     }
 
     private func captureFloatFrames() {

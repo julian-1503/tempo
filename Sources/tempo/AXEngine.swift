@@ -102,6 +102,19 @@ enum AXEngine {
     ///      "settles" a moment later. We force the attribute off before writing.
     @discardableResult
     static func setFrame(_ window: AXUIElement, position: CGPoint, size: CGSize) -> Bool {
+        // Skip when the window is already at the target frame (within a couple of
+        // points). This is not just an optimization: it breaks a feedback loop.
+        // Writing the frame toggles AXEnhancedUserInterface (below), which makes
+        // Chrome rebuild its window and emit create/destroy notifications; the
+        // daemon re-applies on those, which calls setFrame again. Because Chrome
+        // re-enables AXEnhancedUserInterface on each rebuild, "disable and leave
+        // off" alone never converges. Only writing on a *real* frame change stops
+        // the loop — once the window is placed, subsequent applies do nothing.
+        if let p = AXEngine.position(window), let s = AXEngine.size(window),
+           abs(p.x - position.x) < 2, abs(p.y - position.y) < 2,
+           abs(s.width - size.width) < 2, abs(s.height - size.height) < 2 {
+            return true
+        }
         disableEnhancedUI(window)
         setSize(window, size)
         setPosition(window, position)
