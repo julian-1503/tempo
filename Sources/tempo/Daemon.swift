@@ -142,12 +142,25 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     /// Cross-app focus follow: when `app` becomes frontmost (Cmd+Tab, Spotlight),
     /// look up its focused window's workspace and switch if different. No-op when
     /// the focused window isn't tracked or its workspace is already active.
+    ///
+    /// macOS fires this notification for every app activation including system
+    /// services and apps without windows. Force-casting the focused-window
+    /// attribute crashes the daemon if it isn't an AXUIElement (or absent);
+    /// guard with CFGetTypeID and skip cleanly. Also guard against re-entrancy
+    /// from our own `controller.switchTo` → `AXEngine.focus` → activate chain.
+    private var inAppActivatedHandler = false
     fileprivate func handleAppActivated(_ app: NSRunningApplication) {
+        if inAppActivatedHandler { return }
+        inAppActivatedHandler = true
+        defer { inAppActivatedHandler = false }
+
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
         var winRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &winRef) == .success,
-              let winRef else { return }
-        let window = winRef as! AXUIElement
+              let raw = winRef,
+              CFGetTypeID(raw) == AXUIElementGetTypeID()
+        else { return }
+        let window = raw as! AXUIElement
         guard let id = controller.windowID(matching: window),
               let target = controller.workspace(of: id),
               target != controller.active else { return }
