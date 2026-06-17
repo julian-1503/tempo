@@ -168,17 +168,6 @@ public struct WorkspaceModel {
         }
     }
 
-    /// Snapshot every assigned window as a `[PlacedWindow]`, joining the model's
-    /// (window→workspace) map with the caller's `WindowID → WindowInfo` cache.
-    /// Sorted by (workspace, windowID) for deterministic state-file output.
-    /// Windows whose info is missing are skipped silently.
-    public func placedWindows(using infos: [WindowID: WindowInfo]) -> [PlacedWindow] {
-        assignment
-            .sorted { ($0.value, $0.key) < ($1.value, $1.key) }
-            .compactMap { id, workspace in
-                infos[id].map { PlacedWindow(window: $0, workspace: workspace) }
-            }
-    }
 }
 
 /// Tile navigation direction for focus-tile and move-tile commands.

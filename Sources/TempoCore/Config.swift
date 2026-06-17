@@ -1,27 +1,20 @@
 import Foundation
 
 /// Daemon-side static config (see CONTEXT.md). Hand-edited TOML at
-/// `$TEMPO_HOME/tempo.toml`. Env vars (`TEMPO_MANAGE`, `TEMPO_SCENE`) override
-/// matching config values — the env knobs exist for sandbox testing.
+/// `$TEMPO_HOME/tempo.toml`.
 public struct Config: Equatable, Sendable {
-    /// Bundle IDs the daemon should manage. `nil` means "no restriction".
-    public var managed: [String]?
-    /// Name of the Scene to apply on startup. Falls back through env / nothing.
-    public var defaultScene: String?
-    /// Workspace that's active when the daemon starts (and no Scene declares a focus).
+    /// Workspace that's active when the daemon starts.
     public var defaultWorkspace: String?
-    /// `[scenes]` section: scene name → chord (e.g. `"main" → "alt+ctrl+m"`).
-    /// The daemon parses each chord and dispatches `.applyScene(name)` on a match.
-    public var sceneBindings: [String: String]
+    /// Workspaces shown in the menu bar's "Switch Workspace" submenu. Chord
+    /// bindings (alt+key / alt+shift+key) still work for any 1–9/A–Z label
+    /// regardless of this list — this is purely a menu-curation knob, à la
+    /// AeroSpace's `workspace-to-monitor-force-assignment` list.
+    public var workspaces: [WorkspaceID]
 
-    public init(managed: [String]? = nil,
-                defaultScene: String? = nil,
-                defaultWorkspace: String? = nil,
-                sceneBindings: [String: String] = [:]) {
-        self.managed = managed
-        self.defaultScene = defaultScene
+    public init(defaultWorkspace: String? = nil,
+                workspaces: [WorkspaceID] = []) {
         self.defaultWorkspace = defaultWorkspace
-        self.sceneBindings = sceneBindings
+        self.workspaces = workspaces
     }
 }
 
@@ -33,10 +26,10 @@ public enum ConfigParseError: Error, Equatable {
 /// - line comments starting with `#`
 /// - `[section]` headers
 /// - `key = "string"`
-/// - `key = ["string", "string"]` (single-line arrays; trailing comma OK)
+/// - `key = ["string", "string"]` (single- or multi-line arrays; trailing comma OK)
 /// Unknown sections and keys are tolerated for forward-compat. Anything outside
-/// this subset (nested tables, multi-line values, booleans, datetimes) is out
-/// of scope and will either be ignored (unknown keys) or throw a syntax error.
+/// this subset (nested tables, booleans, datetimes) is out of scope and will
+/// either be ignored (unknown keys) or throw a syntax error.
 public enum ConfigParser {
     public static func parse(_ source: String) throws -> Config {
         var config = Config()
@@ -73,16 +66,12 @@ public enum ConfigParser {
             switch section {
             case "daemon":
                 switch key {
-                case "managed":
-                    config.managed = try parseStringArray(value, line: lineNo)
-                case "default_scene":
-                    config.defaultScene = try parseString(value, line: lineNo)
                 case "default_workspace":
                     config.defaultWorkspace = try parseString(value, line: lineNo)
+                case "workspaces":
+                    config.workspaces = try parseStringArray(value, line: lineNo)
                 default: continue
                 }
-            case "scenes":
-                config.sceneBindings[key] = try parseString(value, line: lineNo)
             default: continue
             }
         }

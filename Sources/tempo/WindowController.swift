@@ -51,20 +51,13 @@ final class WindowController {
         tracked[id]?.info
     }
 
-    /// Update the cached `WindowInfo` for a tracked window. Returns true if the value
-    /// changed (so the daemon can decide whether to republish state.json).
+    /// Update the cached `WindowInfo` for a tracked window. Returns true if the value changed.
     @discardableResult
     func setInfo(_ info: WindowInfo, for id: WindowID) -> Bool {
         guard var record = tracked[id], record.info != info else { return false }
         record.info = info
         tracked[id] = record
         return true
-    }
-
-    /// Snapshot every tracked window as `[PlacedWindow]`, joining the model's
-    /// assignments with the daemon-side info cache. Used to publish `state.json`.
-    func placedWindows() -> [PlacedWindow] {
-        model.placedWindows(using: tracked.mapValues(\.info))
     }
 
     func adopt(_ id: WindowID, element: AXUIElement, info: WindowInfo, workspace: WorkspaceID) {

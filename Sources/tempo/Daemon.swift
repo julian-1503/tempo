@@ -2,8 +2,10 @@ import AppKit
 import ApplicationServices
 import TempoCore
 
-/// The long-running Tempo daemon: adopts managed windows into workspaces, applies the
-/// active workspace's tiling, shows a menu bar item, and takes commands over a FIFO.
+/// The long-running Tempo daemon: adopts every regular app's windows into the
+/// active workspace, applies the active workspace's tiling, shows a menu bar
+/// item, and takes commands over a FIFO. New windows always land in the active
+/// workspace; the user moves them around with chord bindings.
 @MainActor
 final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     private var controller: WindowController!
@@ -11,9 +13,6 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     private var fifoSource: DispatchSourceRead?
     private var fifoFD: Int32 = -1
     private let fifoPath: String
-    private let router = Router()
-    private var scene: Scene?
-    private let statePath: String = daemonStatePath()
     private var eventTap: CFMachPort?
     private var eventTapThread: Thread?
     private let config: Config = loadDaemonConfig()
@@ -24,40 +23,9 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     private var workspaceTermObserver: NSObjectProtocol?
     private var workspaceActivateObserver: NSObjectProtocol?
     private var paused = false
-    /// Parsed `[scenes]` chord → scene bindings from `tempo.toml`. Read by the
-    /// nonisolated event-tap callback via `matchSceneBinding` — a Sendable struct
-    /// (vs a labeled tuple) keeps Swift 6's runtime isolation check off the
-    /// non-main thread.
-    nonisolated let sceneBindings: [SceneBinding]
 
     init(fifoPath: String) {
         self.fifoPath = fifoPath
-        self.sceneBindings = Self.parseSceneBindings(loadDaemonConfig().sceneBindings)
-    }
-
-    /// Translate the TOML `[scenes]` map (name → chord string) into a parsed
-    /// list. Bad chord strings are dropped with a stderr warning.
-    nonisolated private static func parseSceneBindings(_ raw: [String: String]) -> [SceneBinding] {
-        var result: [SceneBinding] = []
-        for (sceneName, chordStr) in raw {
-            if let parsed = parseChord(chordStr) {
-                result.append(SceneBinding(chord: parsed, scene: sceneName))
-            } else {
-                FileHandle.standardError.write(Data(
-                    "config: ignoring invalid chord for scene '\(sceneName)': \(chordStr)\n".utf8))
-            }
-        }
-        return result
-    }
-
-    /// Lookup helper called from the event-tap thread — `nonisolated` keeps the
-    /// Swift 6 runtime isolation check off the path.
-    nonisolated func matchSceneBinding(keyCode: UInt16, modifiers: Modifiers) -> String? {
-        for binding in sceneBindings
-            where binding.chord.keyCode == keyCode && binding.chord.modifiers == modifiers {
-            return binding.scene
-        }
-        return nil
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -66,9 +34,6 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         // runs. Without the prompt option (`AXIsProcessTrusted()`) the daemon just
         // silently exits, which is hostile for a fresh install — the user sees only
         // the launchd retry loop with no UI cue.
-        //
-        // Hardcoding the option key string ("AXTrustedCheckOptionPrompt") sidesteps
-        // Swift 6's concurrency check on the underlying mutable `var` import.
         let opts: NSDictionary = ["AXTrustedCheckOptionPrompt": true]
         guard AXIsProcessTrustedWithOptions(opts) else {
             log("Accessibility permission required — grant it in System Settings > Privacy & Security > Accessibility.")
@@ -76,13 +41,11 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        scene = loadStartupScene()
-        let active = scene?.focusWorkspace ?? config.defaultWorkspace ?? "1"
+        let active = config.defaultWorkspace ?? "1"
         controller = WindowController(active: active, area: AXEngine.mainDisplayArea())
 
         setupAXObservers()
         controller.apply()
-        publishState()
 
         setupMenuBar()
         setupFIFO()
@@ -90,25 +53,11 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         log("tempo daemon started — active workspace \(controller.active), fifo \(fifoPath)")
     }
 
-    /// Where a window belongs under the current Scene (active workspace if unmatched).
-    private func workspace(for info: WindowInfo) -> WorkspaceID {
-        guard let scene,
-              case let .route(target, _, _) = router.decide(for: info, scene: scene, activeWorkspace: controller.active)
-        else { return controller.active }
-        return target
-    }
-
-    /// Should this window auto-float? True for dialog/floating subroles, or when the
-    /// scene's matching assignment explicitly asks for `float: true`.
+    /// Dialog/floating subroles auto-float. Everything else tiles.
     private func shouldFloat(_ info: WindowInfo) -> Bool {
         switch info.subrole {
         case .dialog, .floatingWindow: return true
-        default: break
-        }
-        guard let scene else { return false }
-        switch router.decide(for: info, scene: scene, activeWorkspace: controller.active) {
-        case .route(_, _, let float):    return float
-        case .showInCurrent(let float):  return float
+        default: return false
         }
     }
 
@@ -183,7 +132,7 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     /// from our own `controller.switchTo` → `AXEngine.focus` → activate chain.
     private var inAppActivatedHandler = false
     fileprivate func handleAppActivated(_ app: NSRunningApplication) {
-        if inAppActivatedHandler || inSceneApply { return }
+        if inAppActivatedHandler { return }
         inAppActivatedHandler = true
         defer { inAppActivatedHandler = false }
 
@@ -199,7 +148,6 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
               target != controller.active else { return }
         controller.switchTo(target, focusing: id)
         updateMenuBar()
-        publishState()
         log("focus follow (app activated \(app.bundleIdentifier ?? "?")) -> workspace \(target)")
     }
 
@@ -233,44 +181,32 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         }
         if applyAndPublish && adopted {
             controller.apply()
-            publishState()
         }
     }
 
+    /// Adopt a window into the active workspace. New windows always land in
+    /// whichever workspace is active when they appear — the user moves them
+    /// around with `alt+shift+<key>`. No app-specific routing rules.
     @discardableResult
     private func adoptWindow(_ element: AXUIElement, applyAndPublish: Bool) -> Bool {
         var pid: pid_t = 0
         guard AXUIElementGetPid(element, &pid) == .success,
-              let app = NSRunningApplication(processIdentifier: pid),
-              let bundleId = app.bundleIdentifier,
-              isManaged(bundleId),
+              NSRunningApplication(processIdentifier: pid) != nil,
               let id = AXEngine.windowID(element),
               !controller.knownIDs.contains(id),
               let info = AXEngine.windowInfo(element)
         else { return false }
 
-        // hideUnassigned: if the active scene doesn't have an assignment for this
-        // window's app, app-hide it instead of adopting. Keeps "presentation-safe"
-        // scenes actually safe at runtime, not just at one-shot scene apply.
-        if let scene, scene.hideUnassigned,
-           case .showInCurrent = router.decide(for: info, scene: scene, activeWorkspace: controller.active) {
-            AXEngine.hideApp(bundleId: bundleId)
-            log("new window \(info.bundleId) [\(info.title)] -> hidden (unassigned in scene \(scene.name))")
-            return false
-        }
-
-        let target = workspace(for: info)
+        let target = controller.active
         controller.adopt(id, element: element, info: info, workspace: target)
         if shouldFloat(info) { controller.markFloating(id, true) }
         subscribeWindowEvents(element: element, pid: pid)
 
         let floatTag = shouldFloat(info) ? " (floating)" : ""
-        log("new window \(info.bundleId) [\(info.title)] -> workspace \(target)" +
-            (target == controller.active ? "" : " (filed, focus kept)") + floatTag)
+        log("new window \(info.bundleId) [\(info.title)] -> workspace \(target)\(floatTag)")
 
-        if applyAndPublish {
-            if !paused { controller.apply() }
-            publishState()
+        if applyAndPublish && !paused {
+            controller.apply()
         }
         return true
     }
@@ -303,14 +239,11 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             unsubscribeWindowEvents(element: element, pid: pid)
             controller.forget(id)
             if !paused { controller.apply() }
-            publishState()
             log("window closed -> id \(id) forgotten")
         case kAXTitleChangedNotification:
             guard let id = controller.windowID(matching: element),
                   let info = AXEngine.windowInfo(element) else { return }
-            if controller.setInfo(info, for: id) {
-                publishState()
-            }
+            _ = controller.setInfo(info, for: id)
         case kAXFocusedWindowChangedNotification:
             // Cmd+Tab / Spotlight / dock click into a window on a different workspace
             // → follow focus across workspaces. The user already focused the specific
@@ -320,27 +253,9 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
                   target != controller.active else { return }
             controller.switchTo(target, focusing: id)
             updateMenuBar()
-            publishState()
             log("focus follow -> workspace \(target) (window \(id))")
         default: break
         }
-    }
-
-    /// Env `TEMPO_MANAGE` (comma-separated) wins; otherwise `[daemon] managed = [...]`
-    /// from `tempo.toml`; otherwise no restriction.
-    private func isManaged(_ bundleId: String) -> Bool {
-        if let list = ProcessInfo.processInfo.environment["TEMPO_MANAGE"], !list.isEmpty {
-            return list.split(separator: ",").map(String.init).contains(bundleId)
-        }
-        if let managed = config.managed { return managed.contains(bundleId) }
-        return true
-    }
-
-    /// Env `TEMPO_SCENE` wins; otherwise `[daemon] default_scene = "..."` from `tempo.toml`.
-    private func loadStartupScene() -> Scene? {
-        let name = ProcessInfo.processInfo.environment["TEMPO_SCENE"] ?? config.defaultScene
-        guard let name else { return nil }
-        return try? FileSceneStore(directory: scenesDirectory()).load(name)
     }
 
     private func setupMenuBar() {
@@ -350,8 +265,7 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateMenuBar() {
         let icon = paused ? "⏸" : "T"
-        let sceneStr = scene?.name ?? "-"
-        statusItem.button?.title = "\(icon) \(sceneStr) • \(controller.active)"
+        statusItem.button?.title = "\(icon) \(controller.active)"
         statusItem.menu = buildMenu()
     }
 
@@ -365,35 +279,21 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(pause)
         menu.addItem(.separator())
 
-        let scenesMenu = NSMenu()
-        let store = FileSceneStore(directory: scenesDirectory())
-        let names = (try? store.list()) ?? []
-        for name in names {
-            let item = NSMenuItem(
-                title: name,
-                action: #selector(applySceneFromMenu(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = name
-            if name == scene?.name { item.state = .on }
-            scenesMenu.addItem(item)
-        }
-        if names.isEmpty {
-            scenesMenu.addItem(NSMenuItem(title: "(no scenes in \(scenesDirectory().path))",
-                                         action: nil, keyEquivalent: ""))
-        }
-        let scenesItem = NSMenuItem(title: "Apply Scene", action: nil, keyEquivalent: "")
-        scenesItem.submenu = scenesMenu
-        menu.addItem(scenesItem)
-
         let wsMenu = NSMenu()
-        for ws in workspaceList() {
-            let item = NSMenuItem(
-                title: ws,
-                action: #selector(switchWorkspaceFromMenu(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = ws
-            if ws == controller.active { item.state = .on }
-            wsMenu.addItem(item)
+        let listed = config.workspaces
+        if listed.isEmpty {
+            wsMenu.addItem(NSMenuItem(
+                title: "(no workspaces in tempo.toml)", action: nil, keyEquivalent: ""))
+        } else {
+            for ws in listed {
+                let item = NSMenuItem(
+                    title: ws,
+                    action: #selector(switchWorkspaceFromMenu(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = ws
+                if ws == controller.active { item.state = .on }
+                wsMenu.addItem(item)
+            }
         }
         let wsItem = NSMenuItem(title: "Switch Workspace", action: nil, keyEquivalent: "")
         wsItem.submenu = wsMenu
@@ -406,28 +306,13 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         return menu
     }
 
-    /// Workspaces shown in the menu: the current workspace, every workspace any
-    /// loaded Scene assigns to, plus the default key glyph set (1–7, A–T sans
-    /// H/J/K/L which are tile-nav). Sorted lexicographically for stable order.
-    private func workspaceList() -> [String] {
-        var set: Set<String> = [controller.active]
-        if let scene { for a in scene.assignments { set.insert(a.workspace) } }
-        for w in ["1","2","3","4","5","6","7","A","B","C","I","M","N","Q","T"] { set.insert(w) }
-        return set.sorted()
-    }
-
     @objc private func quit() { NSApp.terminate(nil) }
 
     @objc private func togglePauseFromMenu() { togglePaused() }
 
-    @objc private func applySceneFromMenu(_ sender: NSMenuItem) {
-        guard let name = sender.representedObject as? String else { return }
-        applyScene(named: name, source: "menu")
-    }
-
     @objc private func switchWorkspaceFromMenu(_ sender: NSMenuItem) {
         guard let ws = sender.representedObject as? String else { return }
-        controller.switchTo(ws); updateMenuBar(); publishState()
+        controller.switchTo(ws); updateMenuBar()
         log("menu -> workspace \(ws)")
     }
 
@@ -458,9 +343,9 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         guard !paused else { log("ignored while paused: \(command)"); return }
         switch parts.first {
         case "workspace" where parts.count >= 2:
-            controller.switchTo(parts[1]); updateMenuBar(); publishState(); log("-> workspace \(parts[1])")
+            controller.switchTo(parts[1]); updateMenuBar(); log("-> workspace \(parts[1])")
         case "back":
-            controller.backAndForth(); updateMenuBar(); publishState(); log("-> back")
+            controller.backAndForth(); updateMenuBar(); log("-> back")
         default:
             log("unknown command: \(command)")
         }
@@ -477,10 +362,10 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         }
         switch hotkey {
         case .switchWorkspace(let id):
-            controller.switchTo(id); updateMenuBar(); publishState()
+            controller.switchTo(id); updateMenuBar()
             log("hotkey -> workspace \(id)")
         case .backAndForth:
-            controller.backAndForth(); updateMenuBar(); publishState()
+            controller.backAndForth(); updateMenuBar()
             log("hotkey -> back")
         case .moveFocusedWindow(let target):
             guard let focusedID = AXEngine.focusedWindowID(),
@@ -488,7 +373,7 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
                 log("hotkey -> move focused to \(target) (no managed focused window)")
                 return
             }
-            controller.moveWindow(focusedID, to: target); publishState()
+            controller.moveWindow(focusedID, to: target)
             log("hotkey -> move focused (\(focusedID)) to \(target)")
         case .focusTile(let direction):
             if controller.focusTile(direction) {
@@ -498,7 +383,6 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             }
         case .moveTile(let direction):
             if controller.moveTile(direction) {
-                publishState()
                 log("hotkey -> move tile \(direction)")
             } else {
                 log("hotkey -> move tile \(direction) (no-op)")
@@ -529,43 +413,6 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             }
         case .togglePaused:
             break // handled at the top
-        case .applyScene(let name):
-            applyScene(named: name, source: "hotkey")
-        }
-    }
-
-    /// Switch the active Scene at runtime. Forget every tracked window, then in
-    /// one pass: unhide only the apps the new scene actually assigns (so previously
-    /// app-hidden apps reappear), and re-enumerate each running app's windows.
-    /// `adoptWindow`'s hideUnassigned guard re-hides any app the new scene doesn't
-    /// want. Re-entrancy flag suppresses AX notification follow-up that the
-    /// re-adopt churn would otherwise trigger and amplify into visible flicker.
-    private var inSceneApply = false
-    fileprivate func applyScene(named name: String, source: String) {
-        do {
-            let store = FileSceneStore(directory: scenesDirectory())
-            let loaded = try store.load(name)
-            inSceneApply = true
-            defer { inSceneApply = false }
-            scene = loaded
-            for id in Array(controller.knownIDs) { controller.forget(id) }
-            let assigned = Set(loaded.assignments.compactMap(\.match.bundleId))
-            for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
-                if let bid = app.bundleIdentifier, assigned.contains(bid), app.isHidden {
-                    app.unhide()
-                }
-                enumerateExistingWindows(of: app, applyAndPublish: false)
-            }
-            if let focus = loaded.focusWorkspace {
-                controller.switchTo(focus)
-            } else {
-                controller.apply()
-            }
-            updateMenuBar()
-            publishState()
-            log("\(source) -> apply scene \(name)")
-        } catch {
-            log("\(source) -> apply scene \(name) failed: \(error)")
         }
     }
 
@@ -575,7 +422,6 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             controller.restoreAllToScreen()
         } else {
             controller.apply()
-            publishState()
         }
         updateMenuBar()
         log("hotkey -> paused: \(paused)")
@@ -593,8 +439,7 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     /// the dedicated `tempo.event-tap` thread, and Swift 6's runtime asserts
     /// MainActor isolation on every static method of an @MainActor class
     /// unless explicitly opted out, which crashes the daemon with
-    /// `dispatch_assert_queue_fail` on macOS where the strict runtime is in
-    /// effect (observed on Sequoia, may differ on Tahoe).
+    /// `dispatch_assert_queue_fail`.
     nonisolated fileprivate static func modifiers(from flags: CGEventFlags) -> Modifiers {
         var mods: Modifiers = []
         if flags.contains(.maskAlternate)   { mods.insert(.option) }
@@ -625,13 +470,6 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
                 let delegate = Unmanaged<TempoAppDelegate>.fromOpaque(refcon).takeUnretainedValue()
                 let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
                 let mods = TempoAppDelegate.modifiers(from: event.flags)
-                // User-defined scene bindings win over the built-in chord map.
-                if let scene = delegate.matchSceneBinding(keyCode: keyCode, modifiers: mods) {
-                    DispatchQueue.main.async {
-                        MainActor.assumeIsolated { delegate.handle(hotkey: .applyScene(scene)) }
-                    }
-                    return nil
-                }
                 if let hotkey = HotkeyDecoder.decode(keyCode: keyCode, modifiers: mods) {
                     DispatchQueue.main.async {
                         MainActor.assumeIsolated { delegate.handle(hotkey: hotkey) }
@@ -666,21 +504,6 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         eventTapThread = thread
     }
 
-    /// Atomically rewrite `state.json` with the current `[PlacedWindow]` snapshot.
-    /// Consumed by `tempo scene create --from-current` and by external tools.
-    private func publishState() {
-        do {
-            let data = try Placements.encodeJSON(controller.placedWindows())
-            let final = URL(fileURLWithPath: statePath)
-            let tmp = final.deletingLastPathComponent()
-                .appendingPathComponent(".\(final.lastPathComponent).tmp")
-            try data.write(to: tmp, options: .atomic)
-            _ = try? FileManager.default.replaceItemAt(final, withItemAt: tmp)
-        } catch {
-            log("publishState failed: \(error)")
-        }
-    }
-
     private func log(_ message: String) {
         FileHandle.standardError.write(Data((message + "\n").utf8))
     }
@@ -707,12 +530,6 @@ func daemonFIFOPath() -> String {
     daemonBaseDirectory() + "/tempo.cmd"
 }
 
-/// File the daemon atomically rewrites with the current `[PlacedWindow]` JSON on every state change.
-/// Consumed by `scene create --from-current`; absence implies the daemon isn't running.
-func daemonStatePath() -> String {
-    daemonBaseDirectory() + "/state.json"
-}
-
 /// Path to the hand-edited TOML config. Missing file → empty `Config`.
 func daemonConfigPath() -> String {
     daemonBaseDirectory() + "/tempo.toml"
@@ -737,13 +554,6 @@ final class AXThreadHandle: @unchecked Sendable {
     var runLoop: CFRunLoop?
     let ready = DispatchSemaphore(value: 0)
     var noopSourceContext = CFRunLoopSourceContext()
-}
-
-/// Parsed `[scenes]` binding. Plain Sendable struct (vs a labeled tuple) so the
-/// event-tap thread can iterate without tripping Swift 6 isolation checks.
-struct SceneBinding: Sendable {
-    let chord: ChordBinding
-    let scene: String
 }
 
 /// `AXUIElement` is a CF class without a Sendable conformance — wrap it for the
