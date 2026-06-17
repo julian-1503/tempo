@@ -244,6 +244,25 @@ final class WindowController {
         model.markFloating(id, floating)
     }
 
+    /// Bring every off-screen tracked window back to a usable on-screen frame — its
+    /// cached float position if any, otherwise centered in the workspace area. Used
+    /// when entering pause: hidden windows must be reachable so the user can work in
+    /// the normal-mac windowing model until they resume Tempo.
+    func restoreAllToScreen() {
+        for (_, record) in tracked {
+            guard let p = AXEngine.position(record.element), isOffScreen(p) else { continue }
+            if let cached = record.floatFrame, !isOffScreen(cached.position) {
+                AXEngine.setSize(record.element, cached.size)
+                AXEngine.setPosition(record.element, cached.position)
+            } else if let s = AXEngine.size(record.element) {
+                let centered = CGPoint(
+                    x: area.x + (area.width  - s.width)  / 2,
+                    y: area.y + (area.height - s.height) / 2)
+                AXEngine.setPosition(record.element, centered)
+            }
+        }
+    }
+
     private func captureFloatFrames() {
         for id in Array(tracked.keys) where model.isFloating(id) {
             guard let element = tracked[id]?.element,

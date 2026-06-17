@@ -31,6 +31,9 @@ public enum Hotkey: Equatable, Sendable {
     case toggleFullscreen
     /// Toggle the floating flag for the focused window in the active workspace.
     case toggleFloating
+    /// Pause/resume Tempo. While paused, hidden windows are restored to screen and the
+    /// daemon stops moving things — only the resume chord and `quit` still fire.
+    case togglePaused
 }
 
 /// Pure mapping from (keyCode, modifiers) to a `Hotkey`. v1 binding scheme:
@@ -62,6 +65,11 @@ public enum HotkeyDecoder {
         if keyCode == kF && modifiers.contains(.shift) {
             return .toggleFullscreen
         }
+        // alt+shift+escape pauses/resumes the whole daemon — the escape hatch back to
+        // a normal-mac-windowing session without quitting Tempo.
+        if keyCode == kEscape && modifiers.contains(.shift) {
+            return .togglePaused
+        }
         guard let label = workspaceLabel(forKeyCode: keyCode) else { return nil }
         return modifiers.contains(.shift) ? .moveFocusedWindow(label)
                                           : .switchWorkspace(label)
@@ -72,6 +80,7 @@ public enum HotkeyDecoder {
     private static let kComma: UInt16 = 43
     private static let kF: UInt16 = 3
     private static let kSpace: UInt16 = 49
+    private static let kEscape: UInt16 = 53
 
     /// Vim-style HJKL → tile direction. H/J/K/L are intentionally omitted from
     /// `labels` so they reach this map first.

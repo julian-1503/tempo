@@ -135,4 +135,14 @@ struct HotkeyTests {
     func altShiftSpaceUnbound() {
         #expect(HotkeyDecoder.decode(keyCode: kSpace, modifiers: [.option, .shift]) == nil)
     }
+
+    @Test("alt+shift+escape decodes to togglePaused (the daemon escape hatch)")
+    func altShiftEscapeTogglesPaused() {
+        #expect(HotkeyDecoder.decode(keyCode: kEscape, modifiers: [.option, .shift]) == .togglePaused)
+    }
+
+    @Test("alt+escape (no shift) returns nil")
+    func altEscapeUnbound() {
+        #expect(HotkeyDecoder.decode(keyCode: kEscape, modifiers: .option) == nil)
+    }
 }

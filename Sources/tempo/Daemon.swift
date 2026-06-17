@@ -22,6 +22,7 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     private var appObservers: [pid_t: AXObserver] = [:]
     private var workspaceLaunchObserver: NSObjectProtocol?
     private var workspaceTermObserver: NSObjectProtocol?
+    private var paused = false
 
     init(fifoPath: String) { self.fifoPath = fifoPath }
 
@@ -170,7 +171,7 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             (target == controller.active ? "" : " (filed, focus kept)") + floatTag)
 
         if applyAndPublish {
-            controller.apply()
+            if !paused { controller.apply() }
             publishState()
         }
         return true
@@ -203,7 +204,7 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             AXUIElementGetPid(element, &pid)
             unsubscribeWindowEvents(element: element, pid: pid)
             controller.forget(id)
-            controller.apply()
+            if !paused { controller.apply() }
             publishState()
             log("window closed -> id \(id) forgotten")
         case kAXTitleChangedNotification:
@@ -236,16 +237,99 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     private func setupMenuBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         updateMenuBar()
-        let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Quit Tempo", action: #selector(quit), keyEquivalent: "q"))
-        statusItem.menu = menu
     }
 
     private func updateMenuBar() {
-        statusItem.button?.title = "T:\(controller.active)"
+        let icon = paused ? "⏸" : "T"
+        let sceneStr = scene?.name ?? "-"
+        statusItem.button?.title = "\(icon) \(sceneStr) • \(controller.active)"
+        statusItem.menu = buildMenu()
+    }
+
+    private func buildMenu() -> NSMenu {
+        let menu = NSMenu()
+
+        let pause = NSMenuItem(
+            title: paused ? "Resume Tempo" : "Pause Tempo",
+            action: #selector(togglePauseFromMenu), keyEquivalent: "")
+        pause.target = self
+        menu.addItem(pause)
+        menu.addItem(.separator())
+
+        let scenesMenu = NSMenu()
+        let store = FileSceneStore(directory: scenesDirectory())
+        let names = (try? store.list()) ?? []
+        for name in names {
+            let item = NSMenuItem(
+                title: name,
+                action: #selector(applySceneFromMenu(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = name
+            if name == scene?.name { item.state = .on }
+            scenesMenu.addItem(item)
+        }
+        if names.isEmpty {
+            scenesMenu.addItem(NSMenuItem(title: "(no scenes in \(scenesDirectory().path))",
+                                         action: nil, keyEquivalent: ""))
+        }
+        let scenesItem = NSMenuItem(title: "Apply Scene", action: nil, keyEquivalent: "")
+        scenesItem.submenu = scenesMenu
+        menu.addItem(scenesItem)
+
+        let wsMenu = NSMenu()
+        for ws in workspaceList() {
+            let item = NSMenuItem(
+                title: ws,
+                action: #selector(switchWorkspaceFromMenu(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = ws
+            if ws == controller.active { item.state = .on }
+            wsMenu.addItem(item)
+        }
+        let wsItem = NSMenuItem(title: "Switch Workspace", action: nil, keyEquivalent: "")
+        wsItem.submenu = wsMenu
+        menu.addItem(wsItem)
+
+        menu.addItem(.separator())
+        let quitItem = NSMenuItem(title: "Quit Tempo", action: #selector(quit), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
+        return menu
+    }
+
+    /// Workspaces shown in the menu: the current workspace, every workspace any
+    /// loaded Scene assigns to, plus the default key glyph set (1–7, A–T sans
+    /// H/J/K/L which are tile-nav). Sorted lexicographically for stable order.
+    private func workspaceList() -> [String] {
+        var set: Set<String> = [controller.active]
+        if let scene { for a in scene.assignments { set.insert(a.workspace) } }
+        for w in ["1","2","3","4","5","6","7","A","B","C","I","M","N","Q","T"] { set.insert(w) }
+        return set.sorted()
     }
 
     @objc private func quit() { NSApp.terminate(nil) }
+
+    @objc private func togglePauseFromMenu() { togglePaused() }
+
+    @objc private func applySceneFromMenu(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        do {
+            let store = FileSceneStore(directory: scenesDirectory())
+            let loaded = try store.load(name)
+            scene = loaded
+            SceneApplier.apply(loaded)
+            updateMenuBar()
+            log("menu -> apply scene: \(name)")
+        } catch {
+            log("menu -> apply scene \(name) failed: \(error)")
+        }
+    }
+
+    @objc private func switchWorkspaceFromMenu(_ sender: NSMenuItem) {
+        guard let ws = sender.representedObject as? String else { return }
+        controller.switchTo(ws); updateMenuBar(); publishState()
+        log("menu -> workspace \(ws)")
+    }
 
     private func setupFIFO() {
         unlink(fifoPath)
@@ -270,19 +354,27 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
 
     private func handle(_ command: String) {
         let parts = command.split(separator: " ").map(String.init)
+        if parts.first == "quit" { quit(); return }
+        guard !paused else { log("ignored while paused: \(command)"); return }
         switch parts.first {
         case "workspace" where parts.count >= 2:
             controller.switchTo(parts[1]); updateMenuBar(); publishState(); log("-> workspace \(parts[1])")
         case "back":
             controller.backAndForth(); updateMenuBar(); publishState(); log("-> back")
-        case "quit":
-            quit()
         default:
             log("unknown command: \(command)")
         }
     }
 
     fileprivate func handle(hotkey: Hotkey) {
+        if case .togglePaused = hotkey {
+            togglePaused()
+            return
+        }
+        guard !paused else {
+            log("hotkey ignored while paused: \(hotkey)")
+            return
+        }
         switch hotkey {
         case .switchWorkspace(let id):
             controller.switchTo(id); updateMenuBar(); publishState()
@@ -335,7 +427,21 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 log("hotkey -> float (no managed focused window in active workspace)")
             }
+        case .togglePaused:
+            break // handled at the top
         }
+    }
+
+    private func togglePaused() {
+        paused.toggle()
+        if paused {
+            controller.restoreAllToScreen()
+        } else {
+            controller.apply()
+            publishState()
+        }
+        updateMenuBar()
+        log("hotkey -> paused: \(paused)")
     }
 
     fileprivate func reenableEventTap() {
