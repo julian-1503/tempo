@@ -99,32 +99,38 @@ enum AXEngine {
     ///   2. **Animated resizes**: apps with `AXEnhancedUserInterface` enabled
     ///      (Chrome/Electron, anything VoiceOver has touched) *animate* AX-driven
     ///      frame changes, so the window visibly lands at the wrong size and
-    ///      "settles" a moment later. We disable the attribute for the duration
-    ///      of the writes and restore it after, making placement instant.
+    ///      "settles" a moment later. We force the attribute off before writing.
     @discardableResult
     static func setFrame(_ window: AXUIElement, position: CGPoint, size: CGSize) -> Bool {
-        withoutEnhancedUI(window) {
-            setSize(window, size)
-            setPosition(window, position)
-            setSize(window, size)
-        }
+        disableEnhancedUI(window)
+        setSize(window, size)
+        setPosition(window, position)
+        setSize(window, size)
         return true
     }
 
-    /// Run `body` with the window's owning app's `AXEnhancedUserInterface`
-    /// temporarily forced off (restored to its prior value afterward). No-op if
-    /// the attribute is absent or already off.
-    private static func withoutEnhancedUI(_ window: AXUIElement, _ body: () -> Void) {
+    /// Force the owning app's `AXEnhancedUserInterface` OFF and leave it off.
+    /// No-op if the attribute is absent or already off.
+    ///
+    /// We must NOT restore it to `on`: flipping it back on makes Chrome tear
+    /// down and rebuild its AX window, which fires destroy+create
+    /// notifications. The daemon re-adopts/re-applies on those, which calls
+    /// `setFrame` again, which toggles again — a runaway notification storm.
+    /// (Observed on a workspace holding only Chrome: thousands of adopt/forget
+    /// cycles, phantom tile counts, and the cursor stuck re-centering on every
+    /// fullscreen re-apply.) Leaving it off converges after a single rebuild —
+    /// the next `setFrame` sees it already off and does nothing. This is what
+    /// yabai does; animations stay disabled for the app process, which is the
+    /// desired behavior for a tiling WM anyway.
+    private static func disableEnhancedUI(_ window: AXUIElement) {
         var pid: pid_t = 0
-        guard AXUIElementGetPid(window, &pid) == .success else { body(); return }
+        guard AXUIElementGetPid(window, &pid) == .success else { return }
         let app = AXUIElementCreateApplication(pid)
         let key = "AXEnhancedUserInterface" as CFString
         var current: CFTypeRef?
-        let wasOn = AXUIElementCopyAttributeValue(app, key, &current) == .success
+        let isOn = AXUIElementCopyAttributeValue(app, key, &current) == .success
             && (current as? Bool == true)
-        if wasOn { AXUIElementSetAttributeValue(app, key, kCFBooleanFalse) }
-        body()
-        if wasOn { AXUIElementSetAttributeValue(app, key, kCFBooleanTrue) }
+        if isOn { AXUIElementSetAttributeValue(app, key, kCFBooleanFalse) }
     }
 
     /// Stable window id for an AX window (CGWindowID), or nil.
