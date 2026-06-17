@@ -197,6 +197,15 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
               let info = AXEngine.windowInfo(element)
         else { return false }
 
+        // Only manage real top-level windows. Chrome spawns transient AX windows
+        // for WebHID/permission prompts and internal helpers: empty title, no
+        // close button, churning create/destroy. Tiling those oscillates the tile
+        // count, so the real window keeps resizing as they come and go. A genuine
+        // window has a title or a close button (AeroSpace's isWindowHeuristic uses
+        // the same close-button signal); dialogs we float are exempt.
+        let manageable = shouldFloat(info) || !info.title.isEmpty || AXEngine.hasCloseButton(element)
+        guard manageable else { return false }
+
         let target = controller.active
         controller.adopt(id, element: element, info: info, workspace: target)
         if shouldFloat(info) { controller.markFloating(id, true) }

@@ -146,6 +146,15 @@ enum AXEngine {
         if isOn { AXUIElementSetAttributeValue(app, key, kCFBooleanFalse) }
     }
 
+    /// Whether the window exposes a close button. Real top-level windows do;
+    /// Chrome's transient WebHID/permission prompts and internal helper windows
+    /// do not. Used to filter out non-windows that would otherwise tile.
+    static func hasCloseButton(_ window: AXUIElement) -> Bool {
+        var ref: CFTypeRef?
+        return AXUIElementCopyAttributeValue(window, kAXCloseButtonAttribute as CFString, &ref) == .success
+            && ref != nil
+    }
+
     /// Stable window id for an AX window (CGWindowID), or nil.
     static func windowID(_ window: AXUIElement) -> TempoCore.WindowID? {
         var id: CGWindowID = 0

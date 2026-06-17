@@ -329,7 +329,8 @@ final class WindowController {
             for id in (byWorkspace[ws] ?? []).sorted() {
                 let rec = tracked[id]
                 let alive = AXEngine.windowID(rec!.element) != nil
-                lines.append("  id=\(id) \(rec?.info.bundleId ?? "?") float=\(model.isFloating(id)) alive=\(alive) [\(rec?.info.title ?? "")]")
+                let closeBtn = rec.map { AXEngine.hasCloseButton($0.element) } ?? false
+                lines.append("  id=\(id) \(rec?.info.bundleId ?? "?") float=\(model.isFloating(id)) alive=\(alive) close=\(closeBtn) sub=\(rec?.info.subrole.axValue ?? "?") [\(rec?.info.title ?? "")]")
             }
         }
         return lines.joined(separator: "\n")
