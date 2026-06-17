@@ -10,13 +10,18 @@ public struct Config: Equatable, Sendable {
     public var defaultScene: String?
     /// Workspace that's active when the daemon starts (and no Scene declares a focus).
     public var defaultWorkspace: String?
+    /// `[scenes]` section: scene name → chord (e.g. `"main" → "alt+ctrl+m"`).
+    /// The daemon parses each chord and dispatches `.applyScene(name)` on a match.
+    public var sceneBindings: [String: String]
 
     public init(managed: [String]? = nil,
                 defaultScene: String? = nil,
-                defaultWorkspace: String? = nil) {
+                defaultWorkspace: String? = nil,
+                sceneBindings: [String: String] = [:]) {
         self.managed = managed
         self.defaultScene = defaultScene
         self.defaultWorkspace = defaultWorkspace
+        self.sceneBindings = sceneBindings
     }
 }
 
@@ -65,16 +70,20 @@ public enum ConfigParser {
                     if trimmedNext.hasSuffix("]") { break }
                 }
             }
-            guard section == "daemon" else { continue }
-            switch key {
-            case "managed":
-                config.managed = try parseStringArray(value, line: lineNo)
-            case "default_scene":
-                config.defaultScene = try parseString(value, line: lineNo)
-            case "default_workspace":
-                config.defaultWorkspace = try parseString(value, line: lineNo)
-            default:
-                continue
+            switch section {
+            case "daemon":
+                switch key {
+                case "managed":
+                    config.managed = try parseStringArray(value, line: lineNo)
+                case "default_scene":
+                    config.defaultScene = try parseString(value, line: lineNo)
+                case "default_workspace":
+                    config.defaultWorkspace = try parseString(value, line: lineNo)
+                default: continue
+                }
+            case "scenes":
+                config.sceneBindings[key] = try parseString(value, line: lineNo)
+            default: continue
             }
         }
         return config

@@ -34,7 +34,67 @@ public enum Hotkey: Equatable, Sendable {
     /// Pause/resume Tempo. While paused, hidden windows are restored to screen and the
     /// daemon stops moving things — only the resume chord and `quit` still fire.
     case togglePaused
+    /// Apply the named Scene. Triggered by user-configured `[scenes]` bindings in
+    /// `tempo.toml` (e.g. `main = "alt+ctrl+m"`).
+    case applyScene(String)
 }
+
+/// Parsed chord — a key code plus its required modifier set. The decoder/daemon
+/// uses this to match the configured `[scenes]` bindings before falling through
+/// to the built-in chord map.
+public struct ChordBinding: Equatable, Sendable {
+    public let keyCode: UInt16
+    public let modifiers: Modifiers
+    public init(keyCode: UInt16, modifiers: Modifiers) {
+        self.keyCode = keyCode; self.modifiers = modifiers
+    }
+}
+
+/// Parse a chord string like `"alt+ctrl+m"`, `"cmd+shift+f1"`, `"alt+space"` into
+/// a `ChordBinding`. Returns nil on unknown modifier names, unknown key names, or
+/// missing key. Case- and whitespace-insensitive. Modifiers: `alt`/`option`,
+/// `shift`, `ctrl`/`control`, `cmd`/`command`. Keys: a-z, 0-9, `tab`, `space`,
+/// `escape`, `slash`, `comma`, `semicolon`, `quote`, `backtick`, `f1`–`f12`.
+public func parseChord(_ chord: String) -> ChordBinding? {
+    let parts = chord.lowercased().split(separator: "+").map {
+        $0.trimmingCharacters(in: .whitespaces)
+    }
+    var mods: Modifiers = []
+    var keyName: String?
+    for part in parts {
+        switch part {
+        case "alt", "option": mods.insert(.option)
+        case "shift": mods.insert(.shift)
+        case "ctrl", "control": mods.insert(.control)
+        case "cmd", "command": mods.insert(.command)
+        case "": return nil
+        default:
+            if keyName != nil { return nil }
+            keyName = part
+        }
+    }
+    guard let name = keyName, let kc = chordKeyCode(for: name) else { return nil }
+    return ChordBinding(keyCode: kc, modifiers: mods)
+}
+
+private let chordKeyCodeMap: [String: UInt16] = [
+    // letters
+    "a": 0, "b": 11, "c": 8, "d": 2, "e": 14, "f": 3, "g": 5, "h": 4, "i": 34,
+    "j": 38, "k": 40, "l": 37, "m": 46, "n": 45, "o": 31, "p": 35, "q": 12, "r": 15,
+    "s": 1, "t": 17, "u": 32, "v": 9, "w": 13, "x": 7, "y": 16, "z": 6,
+    // digits
+    "0": 29, "1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "8": 28, "9": 25,
+    // named keys
+    "tab": 48, "space": 49, "escape": 53, "esc": 53,
+    "return": 36, "enter": 36,
+    "slash": 44, "comma": 43, "semicolon": 41, "quote": 39, "backtick": 50, "grave": 50,
+    "minus": 27, "equal": 24, "period": 47,
+    // function keys
+    "f1": 122, "f2": 120, "f3": 99,  "f4": 118, "f5": 96,  "f6": 97,
+    "f7": 98,  "f8": 100, "f9": 101, "f10": 109, "f11": 103, "f12": 111,
+]
+
+private func chordKeyCode(for name: String) -> UInt16? { chordKeyCodeMap[name] }
 
 /// Pure mapping from (keyCode, modifiers) to a `Hotkey`. v1 binding scheme:
 /// - `alt + digit/letter` → jump to that workspace

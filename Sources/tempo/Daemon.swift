@@ -24,8 +24,32 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     private var workspaceTermObserver: NSObjectProtocol?
     private var workspaceActivateObserver: NSObjectProtocol?
     private var paused = false
+    /// Parsed `[scenes]` chord → scene bindings from `tempo.toml`. Read by the
+    /// nonisolated event-tap callback; `let` + immutable contents + Sendable
+    /// element types make that safe without locks.
+    nonisolated let sceneBindings: [(chord: ChordBinding, scene: String)]
 
-    init(fifoPath: String) { self.fifoPath = fifoPath }
+    init(fifoPath: String) {
+        self.fifoPath = fifoPath
+        self.sceneBindings = Self.parseSceneBindings(loadDaemonConfig().sceneBindings)
+    }
+
+    /// Translate the TOML `[scenes]` map (name → chord string) into a parsed
+    /// list. Bad chord strings are dropped with a stderr warning.
+    nonisolated private static func parseSceneBindings(
+        _ raw: [String: String]
+    ) -> [(chord: ChordBinding, scene: String)] {
+        var result: [(ChordBinding, String)] = []
+        for (sceneName, chordStr) in raw {
+            if let parsed = parseChord(chordStr) {
+                result.append((parsed, sceneName))
+            } else {
+                FileHandle.standardError.write(Data(
+                    "config: ignoring invalid chord for scene '\(sceneName)': \(chordStr)\n".utf8))
+            }
+        }
+        return result
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // `AXIsProcessTrustedWithOptions` with the prompt option asks macOS to surface
@@ -495,6 +519,17 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             }
         case .togglePaused:
             break // handled at the top
+        case .applyScene(let name):
+            do {
+                let store = FileSceneStore(directory: scenesDirectory())
+                let loaded = try store.load(name)
+                scene = loaded
+                SceneApplier.apply(loaded)
+                updateMenuBar()
+                log("hotkey -> apply scene \(name)")
+            } catch {
+                log("hotkey -> apply scene \(name) failed: \(error)")
+            }
         }
     }
 
@@ -554,6 +589,15 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
                 let delegate = Unmanaged<TempoAppDelegate>.fromOpaque(refcon).takeUnretainedValue()
                 let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
                 let mods = TempoAppDelegate.modifiers(from: event.flags)
+                // User-defined scene bindings win over the built-in chord map.
+                if let scene = delegate.sceneBindings.first(where: {
+                    $0.chord.keyCode == keyCode && $0.chord.modifiers == mods
+                })?.scene {
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated { delegate.handle(hotkey: .applyScene(scene)) }
+                    }
+                    return nil
+                }
                 if let hotkey = HotkeyDecoder.decode(keyCode: keyCode, modifiers: mods) {
                     DispatchQueue.main.async {
                         MainActor.assumeIsolated { delegate.handle(hotkey: hotkey) }
