@@ -27,8 +27,14 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     init(fifoPath: String) { self.fifoPath = fifoPath }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard AXIsProcessTrusted() else {
-            log("Accessibility permission required.")
+        // `AXIsProcessTrustedWithOptions` with the prompt option asks macOS to surface
+        // its Accessibility-permission dialog the first time an unauthorized binary
+        // runs. Without the prompt option (`AXIsProcessTrusted()`) the daemon just
+        // silently exits, which is hostile for a fresh install — the user sees only
+        // the launchd retry loop with no UI cue.
+        let opts: NSDictionary = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true]
+        guard AXIsProcessTrustedWithOptions(opts) else {
+            log("Accessibility permission required — grant it in System Settings > Privacy & Security > Accessibility.")
             NSApp.terminate(nil)
             return
         }
