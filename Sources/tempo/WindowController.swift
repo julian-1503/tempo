@@ -77,10 +77,23 @@ final class WindowController {
         model.remove(id)
     }
 
-    func switchTo(_ workspace: WorkspaceID) {
+    /// Switch the active workspace. If `focusing` is set, focus that specific window
+    /// after apply (used by focus-follows-app: the user already focused this window
+    /// via Cmd+Tab or Spotlight, so we sync to its workspace and leave focus alone).
+    /// Otherwise the first tile in the new workspace gets focus.
+    func switchTo(_ workspace: WorkspaceID, focusing: WindowID? = nil) {
         model.switchTo(workspace)
         apply()
-        focusFirstTracked()
+        if let focusing, let element = tracked[focusing]?.element {
+            AXEngine.focus(element)
+        } else {
+            focusFirstTracked()
+        }
+    }
+
+    /// Which workspace a tracked window belongs to, or nil if it isn't tracked.
+    func workspace(of id: WindowID) -> WorkspaceID? {
+        model.workspace(of: id)
     }
 
     /// Reassign a tracked window to a different workspace and reapply layout.

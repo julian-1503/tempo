@@ -32,7 +32,10 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         // runs. Without the prompt option (`AXIsProcessTrusted()`) the daemon just
         // silently exits, which is hostile for a fresh install — the user sees only
         // the launchd retry loop with no UI cue.
-        let opts: NSDictionary = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true]
+        //
+        // Hardcoding the option key string ("AXTrustedCheckOptionPrompt") sidesteps
+        // Swift 6's concurrency check on the underlying mutable `var` import.
+        let opts: NSDictionary = ["AXTrustedCheckOptionPrompt": true]
         guard AXIsProcessTrustedWithOptions(opts) else {
             log("Accessibility permission required — grant it in System Settings > Privacy & Security > Accessibility.")
             NSApp.terminate(nil)
@@ -133,6 +136,9 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         let appElement = AXUIElementCreateApplication(pid)
         let refcon = Unmanaged.passUnretained(self).toOpaque()
         AXObserverAddNotification(obs, appElement, kAXWindowCreatedNotification as CFString, refcon)
+        // Fires when the user focuses a different window of this app (Cmd+Tab,
+        // Spotlight, dock click). We use it to follow focus across workspaces.
+        AXObserverAddNotification(obs, appElement, kAXFocusedWindowChangedNotification as CFString, refcon)
         if let rl = axHandle.runLoop {
             CFRunLoopAddSource(rl, AXObserverGetRunLoopSource(obs), .defaultMode)
         }
@@ -219,6 +225,17 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             if controller.setInfo(info, for: id) {
                 publishState()
             }
+        case kAXFocusedWindowChangedNotification:
+            // Cmd+Tab / Spotlight / dock click into a window on a different workspace
+            // → follow focus across workspaces. The user already focused the specific
+            // window they wanted; don't second-guess by calling focusFirstTracked.
+            guard let id = controller.windowID(matching: element),
+                  let target = controller.workspace(of: id),
+                  target != controller.active else { return }
+            controller.switchTo(target, focusing: id)
+            updateMenuBar()
+            publishState()
+            log("focus follow -> workspace \(target) (window \(id))")
         default: break
         }
     }
