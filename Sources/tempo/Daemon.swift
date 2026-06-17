@@ -13,7 +13,6 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     private let fifoPath: String
     private let router = Router()
     private var scene: Scene?
-    private var infos: [WindowID: WindowInfo] = [:]
     private let statePath: String = daemonStatePath()
     private var eventTap: CFMachPort?
     private var eventTapThread: Thread?
@@ -161,9 +160,8 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
               let info = AXEngine.windowInfo(element)
         else { return false }
 
-        infos[id] = info
         let target = workspace(for: info)
-        controller.adopt(id, element: element, workspace: target)
+        controller.adopt(id, element: element, info: info, workspace: target)
         if shouldFloat(info) { controller.markFloating(id, true) }
         subscribeWindowEvents(element: element, pid: pid)
 
@@ -205,15 +203,13 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
             AXUIElementGetPid(element, &pid)
             unsubscribeWindowEvents(element: element, pid: pid)
             controller.forget(id)
-            infos[id] = nil
             controller.apply()
             publishState()
             log("window closed -> id \(id) forgotten")
         case kAXTitleChangedNotification:
             guard let id = controller.windowID(matching: element),
                   let info = AXEngine.windowInfo(element) else { return }
-            if infos[id] != info {
-                infos[id] = info
+            if controller.setInfo(info, for: id) {
                 publishState()
             }
         default: break
@@ -417,7 +413,7 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     /// Consumed by `tempo scene create --from-current` and by external tools.
     private func publishState() {
         do {
-            let data = try Placements.encodeJSON(controller.placedWindows(using: infos))
+            let data = try Placements.encodeJSON(controller.placedWindows())
             let final = URL(fileURLWithPath: statePath)
             let tmp = final.deletingLastPathComponent()
                 .appendingPathComponent(".\(final.lastPathComponent).tmp")

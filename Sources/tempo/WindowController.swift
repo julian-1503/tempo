@@ -2,18 +2,32 @@ import AppKit
 import ApplicationServices
 import TempoCore
 
-/// Bridges the pure WorkspaceModel to live AX windows: holds the element handles and
+/// Per-WindowID record of everything the daemon-side bridge holds about a tracked window.
+/// Lives in `WindowController` as `[WindowID: TrackedWindow]` — a single forget Seam for
+/// adding new per-window concepts without proliferating sibling dicts.
+struct TrackedWindow {
+    let element: AXUIElement
+    var info: WindowInfo
+    /// Last on-screen (position, size) — restored when the window's workspace becomes
+    /// active again. Nil until the window has been seen on-screen at least once.
+    var floatFrame: (position: CGPoint, size: CGSize)?
+
+    init(element: AXUIElement, info: WindowInfo) {
+        self.element = element
+        self.info = info
+        self.floatFrame = nil
+    }
+}
+
+/// Bridges the pure WorkspaceModel to live AX windows: holds the per-window records and
 /// applies the visible/hidden decision (tile visible windows, push the rest off-screen).
 @MainActor
 final class WindowController {
     private var model: WorkspaceModel
-    private var elements: [WindowID: AXUIElement] = [:]
+    private var tracked: [WindowID: TrackedWindow] = [:]
     private let tiler = Tiler()
     private let area: Frame
     private let offScreen: CGPoint
-    /// Last on-screen (position, size) per floating window. Restored when its
-    /// workspace becomes active again.
-    private var floatFrames: [WindowID: (position: CGPoint, size: CGSize)] = [:]
 
     init(active: WorkspaceID, area: Frame) {
         self.model = WorkspaceModel(active: active)
@@ -24,29 +38,42 @@ final class WindowController {
     }
 
     var active: WorkspaceID { model.active }
-    var knownIDs: Set<WindowID> { Set(elements.keys) }
+    var knownIDs: Set<WindowID> { Set(tracked.keys) }
 
     /// Find the WindowID of a tracked element by AX equality. Used by the daemon's
     /// destroyed/title-changed notifications, where only the raw AXUIElement is available.
     func windowID(matching element: AXUIElement) -> WindowID? {
-        for (id, el) in elements where CFEqual(el, element) { return id }
+        for (id, record) in tracked where CFEqual(record.element, element) { return id }
         return nil
     }
 
-    /// Snapshot every tracked window as `[PlacedWindow]`, joining the model's
-    /// assignments with the caller's WindowInfo cache. Used to publish `state.json`.
-    func placedWindows(using infos: [WindowID: WindowInfo]) -> [PlacedWindow] {
-        model.placedWindows(using: infos)
+    func info(of id: WindowID) -> WindowInfo? {
+        tracked[id]?.info
     }
 
-    func adopt(_ id: WindowID, element: AXUIElement, workspace: WorkspaceID) {
-        elements[id] = element
+    /// Update the cached `WindowInfo` for a tracked window. Returns true if the value
+    /// changed (so the daemon can decide whether to republish state.json).
+    @discardableResult
+    func setInfo(_ info: WindowInfo, for id: WindowID) -> Bool {
+        guard var record = tracked[id], record.info != info else { return false }
+        record.info = info
+        tracked[id] = record
+        return true
+    }
+
+    /// Snapshot every tracked window as `[PlacedWindow]`, joining the model's
+    /// assignments with the daemon-side info cache. Used to publish `state.json`.
+    func placedWindows() -> [PlacedWindow] {
+        model.placedWindows(using: tracked.mapValues(\.info))
+    }
+
+    func adopt(_ id: WindowID, element: AXUIElement, info: WindowInfo, workspace: WorkspaceID) {
+        tracked[id] = TrackedWindow(element: element, info: info)
         model.add(id, to: workspace)
     }
 
     func forget(_ id: WindowID) {
-        elements[id] = nil
-        floatFrames[id] = nil
+        tracked[id] = nil
         model.remove(id)
     }
 
@@ -58,7 +85,7 @@ final class WindowController {
     /// Reassign a tracked window to a different workspace and reapply layout.
     /// No-op if the window isn't tracked.
     func moveWindow(_ id: WindowID, to workspace: WorkspaceID) {
-        guard elements[id] != nil else { return }
+        guard tracked[id] != nil else { return }
         model.move(id, to: workspace)
         apply()
     }
@@ -69,7 +96,7 @@ final class WindowController {
     func focusTile(_ direction: Direction) -> Bool {
         guard let focused = AXEngine.focusedWindowID(),
               let target = model.neighbor(of: focused, direction: direction),
-              let element = elements[target] else { return false }
+              let element = tracked[target]?.element else { return false }
         if model.fullscreen(in: model.active) != nil {
             model.clearFullscreen(in: model.active)
             apply()
@@ -96,7 +123,7 @@ final class WindowController {
         let active = model.active
         guard let focused = AXEngine.focusedWindowID(),
               model.workspace(of: focused) == active,
-              elements[focused] != nil else { return nil }
+              tracked[focused] != nil else { return nil }
         if model.fullscreen(in: active) != nil {
             model.clearFullscreen(in: active)
         }
@@ -112,7 +139,7 @@ final class WindowController {
         let active = model.active
         guard let focused = AXEngine.focusedWindowID(),
               model.workspace(of: focused) == active,
-              elements[focused] != nil else { return nil }
+              tracked[focused] != nil else { return nil }
         if model.fullscreen(in: active) == focused {
             model.clearFullscreen(in: active)
             apply()
@@ -159,14 +186,13 @@ final class WindowController {
         captureFloatFrames()
 
         // 2a. Fullscreen short-circuit: one window owns the whole area, everything else hides.
-        if let fs = model.fullscreen(in: active), let fsElement = elements[fs] {
+        if let fs = model.fullscreen(in: active), let fsElement = tracked[fs]?.element {
             AXEngine.setSize(fsElement, CGSize(width: area.width, height: area.height))
             AXEngine.setPosition(fsElement, CGPoint(x: area.x, y: area.y))
             AXEngine.setSize(fsElement, CGSize(width: area.width, height: area.height))
             AXEngine.focus(fsElement)
-            for id in elements.keys where id != fs {
-                guard let element = elements[id] else { continue }
-                AXEngine.setPosition(element, offScreen)
+            for (id, record) in tracked where id != fs {
+                AXEngine.setPosition(record.element, offScreen)
             }
             return
         }
@@ -179,7 +205,7 @@ final class WindowController {
         }
         let frames = tiler.layout(count: tiled.count, in: area, mode: mode)
         for (id, frame) in zip(tiled, frames) {
-            guard let element = elements[id] else { continue }
+            guard let element = tracked[id]?.element else { continue }
             AXEngine.setSize(element, CGSize(width: frame.width, height: frame.height))
             AXEngine.setPosition(element, CGPoint(x: frame.x, y: frame.y))
             AXEngine.setSize(element, CGSize(width: frame.width, height: frame.height))
@@ -187,7 +213,7 @@ final class WindowController {
 
         // 3. Push everything in hidden workspaces (tiles + floats) off-screen.
         for id in model.hiddenWindows {
-            guard let element = elements[id] else { continue }
+            guard let element = tracked[id]?.element else { continue }
             AXEngine.setPosition(element, offScreen)
         }
 
@@ -195,33 +221,36 @@ final class WindowController {
         // frame if we don't have one yet; center it as a last resort when the
         // window is currently off-screen with no cache (e.g. daemon restart).
         for id in model.floatingWindows(in: active) {
-            guard let element = elements[id] else { continue }
-            if let cached = floatFrames[id], !isOffScreen(cached.position) {
+            guard let record = tracked[id] else { continue }
+            let element = record.element
+            if let cached = record.floatFrame, !isOffScreen(cached.position) {
                 AXEngine.setSize(element, cached.size)
                 AXEngine.setPosition(element, cached.position)
             } else if let p = AXEngine.position(element), let s = AXEngine.size(element),
                       !isOffScreen(p) {
-                floatFrames[id] = (position: p, size: s)
+                tracked[id]?.floatFrame = (position: p, size: s)
             } else if let s = AXEngine.size(element) {
                 let centered = CGPoint(
                     x: area.x + (area.width  - s.width)  / 2,
                     y: area.y + (area.height - s.height) / 2)
                 AXEngine.setPosition(element, centered)
-                floatFrames[id] = (position: centered, size: s)
+                tracked[id]?.floatFrame = (position: centered, size: s)
             }
         }
     }
 
     func markFloating(_ id: WindowID, _ floating: Bool) {
-        guard elements[id] != nil else { return }
+        guard tracked[id] != nil else { return }
         model.markFloating(id, floating)
     }
 
     private func captureFloatFrames() {
-        for (id, element) in elements where model.isFloating(id) {
-            guard let p = AXEngine.position(element), let s = AXEngine.size(element) else { continue }
+        for id in Array(tracked.keys) where model.isFloating(id) {
+            guard let element = tracked[id]?.element,
+                  let p = AXEngine.position(element),
+                  let s = AXEngine.size(element) else { continue }
             if !isOffScreen(p) {
-                floatFrames[id] = (position: p, size: s)
+                tracked[id]?.floatFrame = (position: p, size: s)
             }
         }
     }
