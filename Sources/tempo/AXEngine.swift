@@ -90,6 +90,43 @@ enum AXEngine {
         return AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, axValue) == .success
     }
 
+    /// Place a window at `position` with `size` deterministically.
+    ///
+    /// Two macOS quirks are handled here:
+    ///   1. **Clamp-on-first-write**: some apps clamp position to the *old* size
+    ///      (or size to the old position). Setting size → position → size again
+    ///      defeats it (AeroSpace issues #143/#335, yabai, Rectangle).
+    ///   2. **Animated resizes**: apps with `AXEnhancedUserInterface` enabled
+    ///      (Chrome/Electron, anything VoiceOver has touched) *animate* AX-driven
+    ///      frame changes, so the window visibly lands at the wrong size and
+    ///      "settles" a moment later. We disable the attribute for the duration
+    ///      of the writes and restore it after, making placement instant.
+    @discardableResult
+    static func setFrame(_ window: AXUIElement, position: CGPoint, size: CGSize) -> Bool {
+        withoutEnhancedUI(window) {
+            setSize(window, size)
+            setPosition(window, position)
+            setSize(window, size)
+        }
+        return true
+    }
+
+    /// Run `body` with the window's owning app's `AXEnhancedUserInterface`
+    /// temporarily forced off (restored to its prior value afterward). No-op if
+    /// the attribute is absent or already off.
+    private static func withoutEnhancedUI(_ window: AXUIElement, _ body: () -> Void) {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(window, &pid) == .success else { body(); return }
+        let app = AXUIElementCreateApplication(pid)
+        let key = "AXEnhancedUserInterface" as CFString
+        var current: CFTypeRef?
+        let wasOn = AXUIElementCopyAttributeValue(app, key, &current) == .success
+            && (current as? Bool == true)
+        if wasOn { AXUIElementSetAttributeValue(app, key, kCFBooleanFalse) }
+        body()
+        if wasOn { AXUIElementSetAttributeValue(app, key, kCFBooleanTrue) }
+    }
+
     /// Stable window id for an AX window (CGWindowID), or nil.
     static func windowID(_ window: AXUIElement) -> TempoCore.WindowID? {
         var id: CGWindowID = 0
@@ -98,16 +135,30 @@ enum AXEngine {
     }
 
     /// The user's currently focused window (the focused app's focused window), or nil.
+    ///
+    /// Resolves the frontmost app via AppKit's `NSWorkspace` rather than the
+    /// systemwide `kAXFocusedApplicationAttribute`. The systemwide attribute
+    /// messages the focused app's AX server to resolve it, and Chrome — which
+    /// throttles its accessibility interface — makes that query fail with
+    /// `kAXErrorCannotComplete` (-25212). That silently no-op'd every
+    /// focus/move/fullscreen chord whenever a Chrome window was frontmost.
+    /// `NSWorkspace.frontmostApplication` reads from the window server, so it
+    /// never touches the target's AX server and stays reliable.
     static func focusedWindow() -> AXUIElement? {
-        let system = AXUIElementCreateSystemWide()
-        var appRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute as CFString, &appRef) == .success,
-              let appRef else { return nil }
-        let app = appRef as! AXUIElement
+        guard let front = NSWorkspace.shared.frontmostApplication else { return nil }
+        let app = AXUIElementCreateApplication(front.processIdentifier)
         var winRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &winRef) == .success,
-              let winRef else { return nil }
-        return (winRef as! AXUIElement)
+        if AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &winRef) == .success,
+           let winRef {
+            return (winRef as! AXUIElement)
+        }
+        // Some apps expose only a main window when no child has explicit focus.
+        var mainRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(app, kAXMainWindowAttribute as CFString, &mainRef) == .success,
+           let mainRef {
+            return (mainRef as! AXUIElement)
+        }
+        return nil
     }
 
     /// Stable id of the currently focused window, or nil.

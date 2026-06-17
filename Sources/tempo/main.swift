@@ -2,7 +2,7 @@ import Foundation
 import ApplicationServices
 import TempoCore
 
-let version = "0.2.3"
+let version = "0.2.4"
 var args = Array(CommandLine.arguments.dropFirst())
 
 func fail(_ message: String, code: Int32 = 1) -> Never {

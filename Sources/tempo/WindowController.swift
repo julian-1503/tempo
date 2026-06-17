@@ -90,11 +90,16 @@ final class WindowController {
     }
 
     /// Reassign a tracked window to a different workspace and reapply layout.
-    /// No-op if the window isn't tracked.
+    /// No-op if the window isn't tracked. When the window leaves the active
+    /// workspace, focus falls to the first remaining tile there — the moved
+    /// window is now hidden, so keeping focus on it would strand the keyboard
+    /// on an off-screen window (AeroSpace parity).
     func moveWindow(_ id: WindowID, to workspace: WorkspaceID) {
         guard tracked[id] != nil else { return }
+        let leavingActive = model.workspace(of: id) == model.active && workspace != model.active
         model.move(id, to: workspace)
         apply()
+        if leavingActive { focusFirstTracked() }
     }
 
     /// Move keyboard focus to the neighboring tile within the active workspace.
@@ -195,9 +200,9 @@ final class WindowController {
 
         // 2a. Fullscreen short-circuit: one window owns the whole area, everything else hides.
         if let fs = model.fullscreen(in: active), let fsElement = tracked[fs]?.element {
-            AXEngine.setSize(fsElement, CGSize(width: area.width, height: area.height))
-            AXEngine.setPosition(fsElement, CGPoint(x: area.x, y: area.y))
-            AXEngine.setSize(fsElement, CGSize(width: area.width, height: area.height))
+            AXEngine.setFrame(fsElement,
+                              position: CGPoint(x: area.x, y: area.y),
+                              size: CGSize(width: area.width, height: area.height))
             AXEngine.focus(fsElement)
             for (id, record) in tracked where id != fs {
                 AXEngine.setPosition(record.element, offScreen)
@@ -214,9 +219,9 @@ final class WindowController {
         let frames = tiler.layout(count: tiled.count, in: area, mode: mode)
         for (id, frame) in zip(tiled, frames) {
             guard let element = tracked[id]?.element else { continue }
-            AXEngine.setSize(element, CGSize(width: frame.width, height: frame.height))
-            AXEngine.setPosition(element, CGPoint(x: frame.x, y: frame.y))
-            AXEngine.setSize(element, CGSize(width: frame.width, height: frame.height))
+            AXEngine.setFrame(element,
+                              position: CGPoint(x: frame.x, y: frame.y),
+                              size: CGSize(width: frame.width, height: frame.height))
         }
 
         // 3. Push everything in hidden workspaces (tiles + floats) off-screen.
@@ -232,8 +237,7 @@ final class WindowController {
             guard let record = tracked[id] else { continue }
             let element = record.element
             if let cached = record.floatFrame, !isOffScreen(cached.position) {
-                AXEngine.setSize(element, cached.size)
-                AXEngine.setPosition(element, cached.position)
+                AXEngine.setFrame(element, position: cached.position, size: cached.size)
             } else if let p = AXEngine.position(element), let s = AXEngine.size(element),
                       !isOffScreen(p) {
                 tracked[id]?.floatFrame = (position: p, size: s)
