@@ -249,6 +249,16 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
               let info = AXEngine.windowInfo(element)
         else { return false }
 
+        // hideUnassigned: if the active scene doesn't have an assignment for this
+        // window's app, app-hide it instead of adopting. Keeps "presentation-safe"
+        // scenes actually safe at runtime, not just at one-shot scene apply.
+        if let scene, scene.hideUnassigned,
+           case .showInCurrent = router.decide(for: info, scene: scene, activeWorkspace: controller.active) {
+            AXEngine.hideApp(bundleId: bundleId)
+            log("new window \(info.bundleId) [\(info.title)] -> hidden (unassigned in scene \(scene.name))")
+            return false
+        }
+
         let target = workspace(for: info)
         controller.adopt(id, element: element, info: info, workspace: target)
         if shouldFloat(info) { controller.markFloating(id, true) }
@@ -412,16 +422,7 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func applySceneFromMenu(_ sender: NSMenuItem) {
         guard let name = sender.representedObject as? String else { return }
-        do {
-            let store = FileSceneStore(directory: scenesDirectory())
-            let loaded = try store.load(name)
-            scene = loaded
-            SceneApplier.apply(loaded)
-            updateMenuBar()
-            log("menu -> apply scene: \(name)")
-        } catch {
-            log("menu -> apply scene \(name) failed: \(error)")
-        }
+        applyScene(named: name, source: "menu")
     }
 
     @objc private func switchWorkspaceFromMenu(_ sender: NSMenuItem) {
@@ -529,16 +530,35 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         case .togglePaused:
             break // handled at the top
         case .applyScene(let name):
-            do {
-                let store = FileSceneStore(directory: scenesDirectory())
-                let loaded = try store.load(name)
-                scene = loaded
-                SceneApplier.apply(loaded)
-                updateMenuBar()
-                log("hotkey -> apply scene \(name)")
-            } catch {
-                log("hotkey -> apply scene \(name) failed: \(error)")
+            applyScene(named: name, source: "hotkey")
+        }
+    }
+
+    /// Switch the active Scene at runtime: forget every tracked window, unhide every
+    /// regular app, then re-enumerate so each app gets adopted/hidden per the new
+    /// scene's assignments. Cleaner than computing per-window diffs, and the
+    /// hideUnassigned guard in `adoptWindow` automatically does the right thing for
+    /// apps the new scene doesn't mention.
+    fileprivate func applyScene(named name: String, source: String) {
+        do {
+            let store = FileSceneStore(directory: scenesDirectory())
+            let loaded = try store.load(name)
+            scene = loaded
+            for id in Array(controller.knownIDs) { controller.forget(id) }
+            for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
+                app.unhide()
+                enumerateExistingWindows(of: app, applyAndPublish: false)
             }
+            if let focus = loaded.focusWorkspace {
+                controller.switchTo(focus)
+            } else {
+                controller.apply()
+            }
+            updateMenuBar()
+            publishState()
+            log("\(source) -> apply scene \(name)")
+        } catch {
+            log("\(source) -> apply scene \(name) failed: \(error)")
         }
     }
 
