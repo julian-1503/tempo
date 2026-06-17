@@ -36,10 +36,12 @@ public enum ConfigParser {
     public static func parse(_ source: String) throws -> Config {
         var config = Config()
         var section: String?
-        var lineNo = 0
-        for rawLine in source.split(separator: "\n", omittingEmptySubsequences: false) {
-            lineNo += 1
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
+        let lines = source.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var i = 0
+        while i < lines.count {
+            let lineNo = i + 1
+            let line = lines[i].trimmingCharacters(in: .whitespaces)
+            i += 1
             if line.isEmpty || line.hasPrefix("#") { continue }
             if line.hasPrefix("[") {
                 guard line.hasSuffix("]") else {
@@ -52,7 +54,17 @@ public enum ConfigParser {
                 throw ConfigParseError.syntax(line: lineNo, reason: "expected `key = value`")
             }
             let key = line[..<eq].trimmingCharacters(in: .whitespaces)
-            let value = line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)
+            var value = line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)
+            // Multi-line array: gather subsequent lines until the matching `]`.
+            if value.hasPrefix("[") && !value.hasSuffix("]") {
+                while i < lines.count {
+                    let next = lines[i].trimmingCharacters(in: .whitespaces)
+                    i += 1
+                    let trimmedNext = next.split(separator: "#").first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
+                    value += " " + trimmedNext
+                    if trimmedNext.hasSuffix("]") { break }
+                }
+            }
             guard section == "daemon" else { continue }
             switch key {
             case "managed":

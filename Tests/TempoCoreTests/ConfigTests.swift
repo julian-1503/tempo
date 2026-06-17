@@ -71,6 +71,30 @@ struct ConfigTests {
         #expect(try ConfigParser.parse(source) == Config(defaultScene: "morning"))
     }
 
+    @Test("multi-line string arrays gather across lines until the closing `]`")
+    func multiLineArray() throws {
+        let source = """
+        [daemon]
+        managed = [
+          "com.apple.TextEdit",
+          "com.brave.Browser",
+        ]
+        """
+        #expect(try ConfigParser.parse(source).managed == ["com.apple.TextEdit", "com.brave.Browser"])
+    }
+
+    @Test("comments inside multi-line arrays are stripped")
+    func multiLineArrayWithComments() throws {
+        let source = """
+        [daemon]
+        managed = [
+          "com.apple.TextEdit", # the writer
+          "com.brave.Browser",  # the browser
+        ]
+        """
+        #expect(try ConfigParser.parse(source).managed == ["com.apple.TextEdit", "com.brave.Browser"])
+    }
+
     @Test("a line without `=` throws a syntax error pointing at the line")
     func missingEquals() {
         #expect(throws: ConfigParseError.syntax(line: 2, reason: "expected `key = value`")) {
