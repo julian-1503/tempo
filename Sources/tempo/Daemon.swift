@@ -185,12 +185,25 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
         AXObserverAddNotification(observer, element, kAXTitleChangedNotification as CFString, refcon)
     }
 
+    /// Symmetric pair to `subscribeWindowEvents` — call from the destroyed-notification
+    /// handler, before `controller.forget`, so the same observer that received the create
+    /// also drops the per-window registrations. Otherwise long-running apps (browser,
+    /// editor) accumulate stale subscriptions for every window they ever opened.
+    private func unsubscribeWindowEvents(element: AXUIElement, pid: pid_t) {
+        guard let observer = appObservers[pid] else { return }
+        AXObserverRemoveNotification(observer, element, kAXUIElementDestroyedNotification as CFString)
+        AXObserverRemoveNotification(observer, element, kAXTitleChangedNotification as CFString)
+    }
+
     fileprivate func handleAXNotification(name: String, element: AXUIElement) {
         switch name {
         case kAXWindowCreatedNotification:
             adoptWindow(element, applyAndPublish: true)
         case kAXUIElementDestroyedNotification:
             guard let id = controller.windowID(matching: element) else { return }
+            var pid: pid_t = 0
+            AXUIElementGetPid(element, &pid)
+            unsubscribeWindowEvents(element: element, pid: pid)
             controller.forget(id)
             infos[id] = nil
             controller.apply()
