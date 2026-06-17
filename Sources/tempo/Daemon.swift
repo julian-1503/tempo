@@ -490,6 +490,16 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
 
 @MainActor
 func runDaemon() {
+    // Refuse to start if another daemon is already running. Two daemons fight
+    // over the same event tap and menu-bar slot — chords get double-handled,
+    // alt+h/l no-ops because each daemon sees the other's window state. The
+    // lock is an advisory `flock` on `$TEMPO_HOME/tempo.lock`; macOS drops it
+    // when the holder exits, so no cleanup path is needed (crash-safe).
+    guard acquireDaemonLock() else {
+        FileHandle.standardError.write(Data(
+            "tempo daemon: another instance is already running (lock held on \(daemonLockPath())). Exiting.\n".utf8))
+        exit(7)
+    }
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
     let delegate = TempoAppDelegate(fifoPath: daemonFIFOPath())
@@ -498,11 +508,31 @@ func runDaemon() {
     _ = delegate // keep alive for the run loop (NSApplication.delegate is weak)
 }
 
+/// Persistent fd for the daemon lock — owning the fd until process exit is what
+/// keeps the `flock` held. Closing it (or letting it deallocate) drops the lock.
+private nonisolated(unsafe) var daemonLockFD: Int32 = -1
+
+func acquireDaemonLock() -> Bool {
+    let path = daemonLockPath()
+    let fd = open(path, O_RDWR | O_CREAT, 0o600)
+    guard fd >= 0 else { return false }
+    if flock(fd, LOCK_EX | LOCK_NB) != 0 {
+        close(fd)
+        return false
+    }
+    daemonLockFD = fd
+    return true
+}
+
 func daemonBaseDirectory() -> String {
     let base = ProcessInfo.processInfo.environment["TEMPO_HOME"]
         ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/tempo").path
     try? FileManager.default.createDirectory(atPath: base, withIntermediateDirectories: true)
     return base
+}
+
+func daemonLockPath() -> String {
+    daemonBaseDirectory() + "/tempo.lock"
 }
 
 func daemonFIFOPath() -> String {

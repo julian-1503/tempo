@@ -105,4 +105,13 @@ struct ConfigTests {
             try ConfigParser.parse("[daemon]\ndefault_workspace = T\n")
         }
     }
+
+    @Test("reserved chord-key labels (F, H, J, K, L) are silently dropped from workspaces")
+    func reservedLabelsDropped() throws {
+        let source = """
+        [daemon]
+        workspaces = ["1", "F", "H", "j", "K", "L", "T"]
+        """
+        #expect(try ConfigParser.parse(source).workspaces == ["1", "T"])
+    }
 }

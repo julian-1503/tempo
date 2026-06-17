@@ -70,9 +70,9 @@ public enum ConfigParser {
                     config.defaultWorkspace = try parseString(value, line: lineNo)
                 case "workspaces":
                     let raw = try parseStringArray(value, line: lineNo)
-                    // H/J/K/L are tile-nav chords (alt+h/j/k/l = focus left/down/up/right);
-                    // they can never be workspace labels. Silently drop them if listed.
-                    let reserved: Set<String> = ["H", "J", "K", "L"]
+                    // H/J/K/L are tile-nav chords; F is the fullscreen chord (alt+shift+f).
+                    // None of them can be workspace labels. Silently drop them if listed.
+                    let reserved: Set<String> = ["F", "H", "J", "K", "L"]
                     config.workspaces = raw.filter { !reserved.contains($0.uppercased()) }
                 default: continue
                 }

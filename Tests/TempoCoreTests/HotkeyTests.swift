@@ -119,9 +119,9 @@ struct HotkeyTests {
         #expect(HotkeyDecoder.decode(keyCode: kF, modifiers: [.option, .shift]) == .toggleFullscreen)
     }
 
-    @Test("alt+f still switches to workspace F")
-    func altFSwitchWorkspace() {
-        #expect(HotkeyDecoder.decode(keyCode: kF, modifiers: .option) == .switchWorkspace("F"))
+    @Test("alt+f is reserved (returns nil) so it can't fat-finger into a ghost workspace F")
+    func altFReserved() {
+        #expect(HotkeyDecoder.decode(keyCode: kF, modifiers: .option) == nil)
     }
 
     let kSpace: UInt16 = 49

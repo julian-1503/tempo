@@ -94,12 +94,14 @@ public enum HotkeyDecoder {
     /// macOS virtual key codes for the digits 0–9 and letters A–Z mapped to their canonical
     /// workspace label string. Workspaces are identified by their key glyph (CONTEXT.md).
     /// H/J/K/L are deliberately absent — they're reserved for focus-tile / move-tile commands
-    /// (AeroSpace muscle-memory parity).
+    /// (AeroSpace muscle-memory parity). F is also absent — it's reserved for fullscreen
+    /// (alt+shift+f); leaving alt+f as a workspace teleport made the chord easy to fat-finger
+    /// into a ghost workspace.
     private static let labels: [UInt16: String] = [
         // digits
         29: "0", 18: "1", 19: "2", 20: "3", 21: "4", 23: "5", 22: "6", 26: "7", 28: "8", 25: "9",
-        // letters (H=4, J=38, K=40, L=37 intentionally omitted)
-        0: "A", 11: "B", 8: "C", 2: "D", 14: "E", 3: "F", 5: "G",         34: "I",
+        // letters (H=4, J=38, K=40, L=37, F=3 intentionally omitted)
+        0: "A", 11: "B", 8: "C", 2: "D", 14: "E",         5: "G",         34: "I",
                                                               46: "M", 45: "N", 31: "O", 35: "P",
         12: "Q", 15: "R", 1: "S", 17: "T", 32: "U", 9: "V", 13: "W", 7: "X", 16: "Y", 6: "Z",
     ]
