@@ -80,6 +80,7 @@ final class WindowController {
     func switchTo(_ workspace: WorkspaceID) {
         model.switchTo(workspace)
         apply()
+        focusFirstTracked()
     }
 
     /// Reassign a tracked window to a different workspace and reapply layout.
@@ -173,6 +174,7 @@ final class WindowController {
     func backAndForth() {
         model.switchBackAndForth()
         apply()
+        focusFirstTracked()
     }
 
     /// Tile the active workspace's non-floating windows; push hidden ones off-screen;
@@ -261,6 +263,17 @@ final class WindowController {
                 AXEngine.setPosition(record.element, centered)
             }
         }
+    }
+
+    /// Focus the first window of the new active workspace so subsequent move-focused /
+    /// focus-tile hotkeys have a managed target. AeroSpace does the same on switch.
+    /// Skipped when the workspace has a fullscreen tile — `apply()` already focused it.
+    private func focusFirstTracked() {
+        let active = model.active
+        if model.fullscreen(in: active) != nil { return }
+        let order = model.tiledWindows(in: active) + model.floatingWindows(in: active)
+        guard let id = order.first, let element = tracked[id]?.element else { return }
+        AXEngine.focus(element)
     }
 
     private func captureFloatFrames() {
