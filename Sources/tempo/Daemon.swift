@@ -517,7 +517,14 @@ final class TempoAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Map CGEventFlags to Tempo's pure `Modifiers` set.
-    fileprivate static func modifiers(from flags: CGEventFlags) -> Modifiers {
+    ///
+    /// `nonisolated` is critical — the C-convention CGEventTap callback runs on
+    /// the dedicated `tempo.event-tap` thread, and Swift 6's runtime asserts
+    /// MainActor isolation on every static method of an @MainActor class
+    /// unless explicitly opted out, which crashes the daemon with
+    /// `dispatch_assert_queue_fail` on macOS where the strict runtime is in
+    /// effect (observed on Sequoia, may differ on Tahoe).
+    nonisolated fileprivate static func modifiers(from flags: CGEventFlags) -> Modifiers {
         var mods: Modifiers = []
         if flags.contains(.maskAlternate)   { mods.insert(.option) }
         if flags.contains(.maskShift)       { mods.insert(.shift) }
